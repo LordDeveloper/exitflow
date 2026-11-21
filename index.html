@@ -552,7 +552,14 @@
         @media (min-width: 681px) { #relayCatalogRows { grid-template-columns: repeat(2, minmax(0, 350px)); } }
         @media (min-width: 1280px) { #relayCatalogRows { grid-template-columns: repeat(4, minmax(0, 350px)); } }
         @media (min-width: 681px) and (max-width: 1000px) { .relay-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-        .relay-city { width: 100%; max-width: 350px; border: 1px solid #2b5549; border-radius: 13px; padding: 13px; min-width: 0; background: #14251f; }
+        .relay-city { width: 100%; max-width: 350px; border: 1px solid #2b5549; border-radius: 13px; padding: 13px; min-width: 0; background: #14251f; position: relative; isolation: isolate; }
+        .relay-city::before { content: ''; position: absolute; z-index: -1; inset: 0 0 auto; height: 100px; border-radius: inherit; background: var(--relay-flag-image, none) center / cover; opacity: .2; filter: blur(8px); mask-image: linear-gradient(#000, transparent); pointer-events: none; }
+        .relay-city[data-installed="false"] { border-color: var(--border); background: #172130; color: #c6d1e4; }
+        .relay-city[data-installed="false"]::before { opacity: .12; filter: grayscale(.75) blur(8px); }
+        .relay-city[data-installed="false"] .relay-city-header { background: #202c3bca; }
+        .relay-edit .relay-country-picker { margin-bottom: 6px; }
+        .relay-edit .relay-country-options { min-width: min(230px, 100%); }
+        #relayCityFilter { min-width: 0; }
         .relay-city-header { display: flex; align-items: center; gap: 8px; border-radius: 8px; padding: 7px 9px; background: linear-gradient(120deg, #213a2d, #15222b); }
         .relay-flag { width: 26px; height: 17px; object-fit: contain; flex: 0 0 auto; }
         .relay-peer-title { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; overflow-wrap: anywhere; }
@@ -697,7 +704,7 @@
                         <summary id="relayCountryLabel" aria-label="فیلتر کشور">همهٔ کشورها</summary>
                         <div id="relayCountryOptions" class="relay-country-options"></div>
                     </details>
-                    <select id="relayCityFilter" aria-label="فیلتر شهر"><option value="">همهٔ شهرها</option></select>
+                    <div id="relayCityFilter"></div>
                     <select id="relayInstallFilter" aria-label="فیلتر وضعیت نصب">
                         <option value="">همهٔ شهرها</option>
                         <option value="installed">نصب‌شده روی روتر</option>
@@ -2116,9 +2123,9 @@
             return { ok: false, text: 'Rx = 0', endpoint, rx };
         }
         if (best.age > HANDSHAKE_FRESH_SEC) {
-            return { ok: false, text: 'هندشیک منقضی ' + formatAge(best.age), endpoint, rx };
+            return { ok: false, text: 'هندشیک منقضی ' + formatAge(best.age), ageText: formatAge(best.age) + ' · منقضی', endpoint, rx };
         }
-        return { ok: true, text: 'هندشیک ' + formatAge(best.age), endpoint, rx };
+        return { ok: true, text: 'هندشیک ' + formatAge(best.age), ageText: formatAge(best.age), endpoint, rx };
     }
 
     function optionHaystack(wg) {
@@ -4363,6 +4370,7 @@
     let relayPage = 0;
     let relayPageSize = 30;
     let relayCountry = '';
+    let relayCity = '';
     const relayCatalogStatus = document.getElementById('relayCatalogStatus');
 
     async function localDashboard(path, data) {
@@ -4449,13 +4457,56 @@
         return relay.city ? JSON.stringify([relay.country, relay.city]) : relay.name;
     }
 
+    function buildRelayPicker(options, selected, label, onChange) {
+        const picker = document.createElement('details');
+        picker.className = 'relay-country-picker';
+        const summary = document.createElement('summary');
+        summary.setAttribute('aria-label', label);
+        const menu = document.createElement('div');
+        menu.className = 'relay-country-options';
+        function paint(option) {
+            summary.replaceChildren(option.text);
+            const flag = relayFlag(option.code);
+            if (flag) summary.prepend(flag);
+            for (const button of menu.children) {
+                button.setAttribute('aria-pressed', String(button.dataset.value === option.value));
+            }
+        }
+        for (const option of options) {
+            const button = relayButton(option.text, '', () => {
+                paint(option);
+                picker.open = false;
+                summary.focus();
+                onChange(option.value);
+            });
+            button.dataset.value = option.value;
+            const flag = relayFlag(option.code);
+            if (flag) button.prepend(flag);
+            menu.append(button);
+        }
+        picker.append(summary, menu);
+        paint(options.find(option => option.value === selected) || options[0]);
+        picker.addEventListener('keydown', event => {
+            if (event.key === 'Escape') {
+                picker.open = false;
+                summary.focus();
+                event.stopPropagation();
+            }
+        });
+        return picker;
+    }
+
     function updateRelayFilters() {
         const countries = new Map();
         const cities = new Map();
         for (const relay of relayCatalog) {
             if (relay.country) countries.set(relay.country, relay.name.split('-')[0]);
             if (relay.city && (!relayCountry || relay.country === relayCountry)) {
-                cities.set(relayCityKey(relay), relay.city + (relayCountry ? '' : ' · ' + relay.country));
+                const value = relayCityKey(relay);
+                cities.set(value, {
+                    value, text: relay.city + (relayCountry ? '' : ' · ' + relay.country),
+                    code: relay.name.split('-')[0]
+                });
             }
         }
         const picker = document.getElementById('relayCountryPicker');
@@ -4479,19 +4530,21 @@
             if (flag) button.prepend(flag);
             options.append(button);
         }
-        const field = document.getElementById('relayCityFilter');
-        const selected = field.value;
-        field.replaceChildren(new Option('همهٔ شهرها', ''));
-        for (const [key, name] of [...cities.entries()].sort((a, b) => a[1].localeCompare(b[1]))) {
-            field.add(new Option(name, key));
-        }
-        field.value = cities.has(selected) ? selected : '';
+        if (!cities.has(relayCity)) relayCity = '';
+        const cityOptions = [{ value: '', text: 'همهٔ شهرها', code: '' },
+            ...[...cities.values()].sort((a, b) => a.text.localeCompare(b.text))];
+        document.getElementById('relayCityFilter').replaceChildren(
+            buildRelayPicker(cityOptions, relayCity, 'فیلتر شهر', value => {
+                relayCity = value;
+                resetRelayPage();
+            })
+        );
     }
 
     function renderRelayManagement() {
         const query = document.getElementById('relayCatalogSearch').value.trim().toLowerCase();
         const filter = document.getElementById('relayInstallFilter').value;
-        const selectedCity = document.getElementById('relayCityFilter').value;
+
         const cities = new Map();
         const byName = new Map(relayCatalog.map(relay => [relay.name, relay]));
         for (const name of installedRelays?.keys() || []) {
@@ -4507,7 +4560,7 @@
             installed: city.relays.map(relay => installedRelays?.get(relay.name)).filter(Boolean)
         })).filter(city => {
             if (relayCountry && city.country !== relayCountry) return false;
-            if (selectedCity && city.key !== selectedCity) return false;
+            if (relayCity && city.key !== relayCity) return false;
             if (filter === 'installed' && !city.installed.length) return false;
             if (filter === 'available' && (!installedRelays || city.installed.length)) return false;
             return [city.city, city.country, ...city.relays.flatMap(relay => [relay.name, relay.ip])]
@@ -4543,14 +4596,23 @@
             const heading = document.createElement('h3');
             heading.textContent = [city.city, city.country].filter(Boolean).join(' · ');
             const flag = city.country && relayFlag(city.relays[0].name.split('-')[0]);
-            if (flag) header.append(flag);
+            if (flag) {
+                header.append(flag);
+                card.style.setProperty('--relay-flag-image', `url("${flag.getAttribute('src')}")`);
+            }
+            card.dataset.installed = String(city.installed.length > 0);
             header.append(heading);
             card.append(header);
-            for (const iface of city.installed) card.append(buildCityPeer(city.relays, iface));
-            const available = city.relays.filter(relay => relay.ip && !installedRelays?.has(relay.name)
-                && !city.installed.some(iface => iface.peer?.['endpoint-address'] === relay.ip
-                    && iface.peer?.['public-key'] === relay.publicKey));
-            if (!city.installed.length || available.length) card.append(buildCityPeer(available, null));
+            const [installed, ...extra] = city.installed;
+            card.append(buildCityPeer(city.relays, installed));
+            if (extra.length) {
+                const legacy = document.createElement('details');
+                const summary = document.createElement('summary');
+                summary.textContent = `${extra.length} اینترفیس اضافهٔ موجود`;
+                legacy.append(summary);
+                for (const iface of extra) legacy.append(buildCityPeer(city.relays, iface));
+                card.append(legacy);
+            }
             rows.append(card);
         }
         document.getElementById('relayCatalogRows').replaceChildren(rows);
@@ -4581,7 +4643,7 @@
             const stats = document.createElement('div');
             stats.className = 'relay-metrics';
             stats.innerHTML = `
-                <div><strong data-metric="health">—</strong><span>Handshake</span></div>
+                <div><span>Handshake</span><strong data-metric="health">—</strong></div>
                 <div><strong data-metric="clients">—</strong><span>کلاینت تخصیص‌یافته</span></div>
                 <div><strong data-metric="latency">—</strong><span>پینگ</span></div>
                 <div class="relay-rx"><strong data-metric="rxSpeed">—</strong><span>↓ دریافت</span><small data-metric="rx"></small></div>
@@ -4608,37 +4670,34 @@
                     }
                 }, relayBusy));
         }
-        const choices = relays.filter(relay => relay.ip && (!iface || peer || 'mv-wg-' + relay.name === iface.name));
-        if (installedRelays && choices.length) {
+        const choices = relays.filter(relay => relay.ip);
+        if (installedRelays && choices.length && (!iface || peer)) {
             const edit = document.createElement('div');
             edit.className = 'relay-edit';
             edit.hidden = true;
-            const select = document.createElement('select');
-            select.setAttribute('aria-label', 'رلهٔ شهر');
-            for (const relay of choices) {
-                const option = document.createElement('option');
-                option.value = relay.name;
-                option.textContent = relay.name + (relay.active ? '' : ' · غیرفعال در Mullvad');
-                select.append(option);
-            }
-            select.value = current?.name || choices[0].name;
-            edit.append(select, relayButton(iface ? 'ذخیرهٔ تغییر' : 'افزودن', 'success', () => {
-                const name = select.value;
-                if (iface && name === current?.name) return;
-                mutateRelay(() => iface && peer ? changeCityRelay(iface, name) : installCatalogRelay(name));
+            let selected = current?.name || choices[0].name;
+            const options = choices.map(relay => ({
+                value: relay.name,
+                code: relay.name.split('-')[0],
+                text: [relay.city, relay.name, relay.active ? '' : 'غیرفعال در Mullvad'].filter(Boolean).join(' · ')
+            }));
+            const picker = buildRelayPicker(options, selected, 'انتخاب رلهٔ شهر', value => { selected = value; });
+            edit.append(picker);
+            if (iface && peer) edit.append(relayButton('ذخیرهٔ تغییر', 'success', () => {
+                if (selected === current?.name) return;
+                mutateRelay(() => changeCityRelay(iface, selected));
             }, relayBusy));
             card.append(edit);
             const editButton = relayIcon(iface ? 'ویرایش رله' : 'انتخاب رله', 'edit', 'info', () => {
                 edit.hidden = !edit.hidden;
                 editButton.setAttribute('aria-expanded', String(!edit.hidden));
-                if (!edit.hidden) select.focus();
+                if (!edit.hidden) picker.querySelector('summary').focus();
             }, relayBusy);
             editButton.setAttribute('aria-expanded', 'false');
             actions.append(editButton);
             if (!iface) {
-                const first = choices[0];
-                actions.append(relayIcon('نصب ' + first.name, 'install', 'success', () => {
-                    mutateRelay(() => installCatalogRelay(first.name));
+                actions.append(relayIcon('نصب رلهٔ انتخاب‌شده', 'install', 'success', () => {
+                    mutateRelay(() => installCatalogRelay(selected));
                 }, relayBusy));
             }
         }
@@ -4654,7 +4713,7 @@
             const model = models.get(name);
             const test = peerTests.get(name);
             const metrics = {
-                health: model?.health.text || '—',
+                health: model?.health.ageText || model?.health.text || '—',
                 clients: model ? String(model.clients.length) : '—',
                 latency: test?.avg || '—',
                 rxSpeed: model ? formatSpeed(model.stats.rxSpeed) : '—',
@@ -4741,6 +4800,12 @@
             apiList('/routing/table?.proplist=.id,name'),
             apiList('/ip/address?.proplist=.id,address,interface')
         ]);
+        const cityInterfaces = new Set(relayCatalog
+            .filter(item => relayCityKey(item) === relayCityKey(relay))
+            .map(item => 'mv-wg-' + item.name));
+        if (interfaces.some(item => item.name !== iface && cityInterfaces.has(item.name))) {
+            throw new Error('این شهر از قبل نصب شده است. از گزینهٔ ویرایش رله استفاده کنید.');
+        }
         if (peers.some(peer => peer.interface !== iface && peer['endpoint-address'] === relay.ip
             && peer['public-key'] === relay.publicKey)) {
             throw new Error('این رله از قبل روی اینترفیس دیگری نصب شده است');
@@ -4876,7 +4941,6 @@
         relayPageSize = Number(event.currentTarget.value);
         resetRelayPage();
     });
-    document.getElementById('relayCityFilter').addEventListener('change', resetRelayPage);
     document.getElementById('relayCountryPicker').addEventListener('keydown', event => {
         if (event.key !== 'Escape') return;
         event.currentTarget.open = false;

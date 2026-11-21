@@ -9,6 +9,7 @@ LOCAL_JSON = "relays.json"
 
 OUTPUT_ROUTES_FILE = "mullvad-offline.rsc"
 OUTPUT_IFACES_FILE = "mullvad-interfaces.rsc"
+OUTPUT_SIMPLE_FILE = "simple.rsc"
 
 PROXY = ""
 
@@ -97,9 +98,10 @@ def generate_routes_rsc(relays):
     with open(OUTPUT_ROUTES_FILE, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(lines) + "\n")
 
-def generate_interfaces_rsc(relays):
+def generate_interfaces_rsc(relays, output_file):
     lines = [
-        "# Mullvad WireGuard Full Peer Infrastructure Generator (RouterOS v7)",
+        "# Mullvad WireGuard peer provisioning (RouterOS v7)",
+        f"# Replaces existing mv-wg-* interfaces with {len(relays)} peer(s).",
         f":local privKey \"{WG_PRIVATE_KEY}\"",
         f":local clientIp \"{WG_CLIENT_IPV4}\"",
         "",
@@ -144,7 +146,7 @@ def generate_interfaces_rsc(relays):
     lines.append("")
     lines.append(f":put \"Full routing & firewall rules created for all {len(relays)} Mullvad peers!\"")
 
-    with open(OUTPUT_IFACES_FILE, "w", encoding="utf-8", newline="\n") as f:
+    with open(output_file, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(lines) + "\n")
 
 def select_relays(data):
@@ -184,8 +186,10 @@ def main():
     generate_routes_rsc(relays)
     print(f"Generated '{OUTPUT_ROUTES_FILE}' ({len(relays)} endpoints).")
     if WG_PRIVATE_KEY:
-        generate_interfaces_rsc(relays)
+        generate_interfaces_rsc(relays, OUTPUT_IFACES_FILE)
+        generate_interfaces_rsc(relays[:1], OUTPUT_SIMPLE_FILE)
         print(f"Generated '{OUTPUT_IFACES_FILE}' for full peer provisioning.")
+        print(f"Generated '{OUTPUT_SIMPLE_FILE}' for testing {relays[0]['hostname']}.")
 
 if __name__ == "__main__":
     main()

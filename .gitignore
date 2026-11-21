@@ -2,3 +2,4 @@ __pycache__/
 mikrotik_audit_report.json
 mullvad-interfaces.rsc
 .env
+simple.rsc

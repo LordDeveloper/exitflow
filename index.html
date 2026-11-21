@@ -1500,16 +1500,20 @@
         }
 
         try {
-            const upstream = await ensureUpstreamHandshake();
-            if (upstream) notes.push(upstream);
-        } catch (err) {
-            errors.push(err.message);
-        }
-
-        try {
-            const handshakes = await ensureMullvadHandshakeRules(rules);
-            notes.push.apply(notes, handshakes.notes);
-            warnings.push.apply(warnings, handshakes.warnings);
+            const routes = await apiList('/ip/route?.proplist=dst-address,gateway,routing-table,disabled');
+            const directRoutes = routes.some((route) => route['routing-table'] === 'main'
+                && route.gateway === 'toTR'
+                && String(route['dst-address']).endsWith('/32')
+                && !isTrue(route.disabled));
+            if (directRoutes) {
+                notes.push('مسیر مستقیم endpointهای Mullvad از toTR شناسایی شد');
+            } else {
+                const upstream = await ensureUpstreamHandshake();
+                if (upstream) notes.push(upstream);
+                const handshakes = await ensureMullvadHandshakeRules(rules);
+                notes.push.apply(notes, handshakes.notes);
+                warnings.push.apply(warnings, handshakes.warnings);
+            }
         } catch (err) {
             errors.push(err.message);
         }
@@ -3193,16 +3197,13 @@
         setBusy(true);
         try {
             setStatus(target ? `در حال اتصال ${ip} به ${target}...` : `در حال بازگرداندن ${ip} به اینترنت عادی...`);
-            const health = await ensureRouterHealth();
-            setHeal(health.notes.concat(health.warnings).join(' · '), health.warnings.length > 0);
-            if (health.errors.length) throw new Error(health.errors.join(' | '));
             const result = await assignClient(ip, target, host, leaseId, isDynamic);
             if (row.dataset.test === '1') await syncTestMark(ip, target);
             resetSpeedWindow();
             await refreshAll();
             syncSelectValue(ip, target);
             const where = target || 'اینترنت عادی';
-            setHeal(health.notes.concat(health.warnings, result.notes, result.warnings).join(' · '), (health.warnings.length + result.warnings.length) > 0);
+            setHeal(result.notes.concat(result.warnings).join(' · '), result.warnings.length > 0);
             setStatus(`${ip} روی ${where} قرار گرفت و ${result.removed} کانکشن فعال بسته شد.`);
         } catch (err) {
             setStatus('خطا هنگام اعمال: ' + err.message, true);

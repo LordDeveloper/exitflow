@@ -18,7 +18,7 @@ INTERFACE_NAME = "toTR"
 # اطلاعات اکانت Mullvad خود را اینجا وارد کنید (از فایل کانفیگ WireGuard مولواد بردارید)
 # ==========================================================
 WG_PRIVATE_KEY = os.environ.get("MULLVAD_WG_PRIVATE_KEY", "")
-WG_CLIENT_IPV4 = "10.71.226.67/32"
+WG_CLIENT_IPV4 = os.environ.get("WG_CLIENT_IPV4", "").strip()
 WG_ENDPOINT_PORT = 51820
 
 # اختیاری: کد کشورها برای محدود کردن لیست (مثلا: ["de", "se", "nl"]) - خالی باشد یعنی همه سرورها
@@ -173,6 +173,14 @@ def select_relays(data):
 
 def main():
     relays = select_relays(get_relays_data())
+    if WG_PRIVATE_KEY:
+        if not WG_CLIENT_IPV4 or "/" not in WG_CLIENT_IPV4:
+            raise SystemExit("Set WG_CLIENT_IPV4 to the IPv4 address with prefix from your Mullvad config.")
+        try:
+            ipaddress.IPv4Interface(WG_CLIENT_IPV4)
+        except ValueError:
+            raise SystemExit("WG_CLIENT_IPV4 must be a valid IPv4 address with prefix.") from None
+
     generate_routes_rsc(relays)
     print(f"Generated '{OUTPUT_ROUTES_FILE}' ({len(relays)} endpoints).")
     if WG_PRIVATE_KEY:

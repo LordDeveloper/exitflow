@@ -617,6 +617,36 @@
         .client-card .relay-icon[hidden] { display: none; }
         body.is-busy .client-card .relay-actions button, body.is-busy .client-card .peer-picker-btn { pointer-events: none; }
         @media (max-width: 750px) { .client-filter-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+        select, .relay-country-picker > summary, .peer-picker-btn {
+            min-height: 40px;
+            border: 1px solid #354b67;
+            border-radius: 9px;
+            background-color: #101e30;
+            color: var(--text);
+            transition: border-color .15s, background-color .15s, box-shadow .15s;
+        }
+        select {
+            appearance: none;
+            min-width: 0;
+            padding-inline: 10px 32px;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%239db9d8' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: left 9px center;
+            color-scheme: dark;
+            cursor: pointer;
+        }
+        select[dir="ltr"] { background-position: right 9px center; }
+        select:hover, .relay-country-picker > summary:hover, .peer-picker-btn:hover { border-color: #5a7799; background-color: #172942; }
+        select:focus-visible, .relay-country-picker > summary:focus-visible, .peer-picker-btn:focus-visible {
+            outline: 2px solid #73b7ff; outline-offset: 2px;
+        }
+        .relay-country-picker > summary { padding-inline: 10px; overflow-wrap: anywhere; }
+        .relay-country-picker[open] > summary { border-color: #73b7ff; background-color: #172942; }
+        .relay-country-options { min-width: 100%; width: max-content; max-width: min(320px, 82vw); margin-top: 4px; box-shadow: 0 12px 24px #080e1899; }
+        .relay-country-options button { min-height: 36px; border-radius: 6px; }
+        .relay-country-options button:hover { background: #263e59; }
+        .relay-toolbar > * { min-width: 0; }
     </style>
 </head>
 <body>
@@ -737,7 +767,7 @@
                     </details>
                     <div id="relayCityFilter"></div>
                     <select id="relayInstallFilter" aria-label="فیلتر وضعیت نصب">
-                        <option value="">همهٔ شهرها</option>
+                        <option value="">همهٔ وضعیت‌های نصب</option>
                         <option value="installed">نصب‌شده روی روتر</option>
                         <option value="available">نصب‌نشده</option>
                     </select>
@@ -2783,9 +2813,9 @@
         setSectionLoading('#tabWireguard .card', true);
         try {
             const [wgList, allIfaces, wgPeers, mangleRules, addrLists] = await Promise.all([
-                apiList('/interface/wireguard?.proplist=name,comment,disabled,running'),
+                apiList('/interface/wireguard?.proplist=.id,name,comment,disabled,running'),
                 apiList('/interface?.proplist=name,comment,rx-byte,tx-byte,running,disabled'),
-                apiList('/interface/wireguard/peers?.proplist=interface,endpoint-address,endpoint-port,current-endpoint-address,current-endpoint-port,last-handshake,rx,tx,disabled'),
+                apiList('/interface/wireguard/peers?.proplist=.id,interface,public-key,endpoint-address,endpoint-port,current-endpoint-address,current-endpoint-port,last-handshake,rx,tx,disabled'),
                 apiList('/ip/firewall/mangle?.proplist=.id,new-routing-mark,routing-mark,bytes,comment,src-address-list'),
                 apiList('/ip/firewall/address-list?.proplist=.id,list,address,comment,disabled')
             ]);
@@ -2893,7 +2923,12 @@
             document.getElementById('wgTabCount').textContent = String(wgCatalog.length);
             const pathPicker = document.getElementById('pathTestPicker');
             setPickerValue(pathPicker, pickerValue(pathPicker), false);
-            updateRelayCardStats();
+            if (monitoring && !relayBusy && syncInstalledRelays(wgList, wgPeers)
+                && !document.getElementById('tabWireguard').hidden) {
+                renderRelayManagement();
+            } else {
+                updateRelayCardStats();
+            }
             updateSummaryStatus();
         } finally {
             setSectionLoading('#tabWireguard .card', false);
@@ -4480,15 +4515,29 @@
             apiList('/interface/wireguard?.proplist=.id,name,disabled'),
             apiList('/interface/wireguard/peers?.proplist=.id,interface,endpoint-address,public-key')
         ]);
+        if (monitoring) syncInstalledRelays(rows, peers);
+    }
+
+    function syncInstalledRelays(rows, peers) {
         const byInterface = new Map();
         for (const peer of peers) {
             if (byInterface.has(peer.interface)) byInterface.set(peer.interface, null);
             else byInterface.set(peer.interface, peer);
         }
-        installedRelays = new Map(rows.filter(row => row.name).map(row => [
+        const next = new Map(rows.filter(row => row.name).map(row => [
             row.name.startsWith('mv-wg-') ? row.name.slice(6) : row.name,
             { ...row, peer: byInterface.get(row.name) }
         ]));
+        const changed = !installedRelays || next.size !== installedRelays.size
+            || [...next].some(([name, item]) => {
+                const old = installedRelays.get(name);
+                return !old || old['.id'] !== item['.id'] || isTrue(old.disabled) !== isTrue(item.disabled)
+                    || old.peer?.['.id'] !== item.peer?.['.id']
+                    || old.peer?.['endpoint-address'] !== item.peer?.['endpoint-address']
+                    || old.peer?.['public-key'] !== item.peer?.['public-key'];
+            });
+        installedRelays = next;
+        return changed;
     }
 
     function relayButton(label, style, action, disabled = false) {
@@ -4561,6 +4610,7 @@
                 onChange(option.value);
             });
             button.dataset.value = option.value;
+            if (option.placeholder) button.disabled = true;
             const flag = relayFlag(option.code);
             if (flag) button.prepend(flag);
             menu.append(button);
@@ -4756,22 +4806,24 @@
             const edit = document.createElement('div');
             edit.className = 'relay-edit';
             edit.hidden = true;
-            let selected = current?.name || choices[0].name;
+            let selected = current?.name || (iface ? '' : choices[0].name);
             const options = choices.map(relay => ({
                 value: relay.name,
                 code: relay.name.split('-')[0],
                 text: [relay.city, relay.name, relay.active ? '' : 'غیرفعال در Mullvad'].filter(Boolean).join(' · ')
             }));
-            const picker = buildRelayPicker(options, selected, 'انتخاب رلهٔ شهر', value => { selected = value; });
+            if (iface && !current) options.unshift({ value: '', code: '', text: 'انتخاب رلهٔ جایگزین', placeholder: true });
+            const picker = buildRelayPicker(options, selected, 'انتخاب رلهٔ شهر', value => {
+                if (!value || value === selected) return;
+                selected = value;
+                if (iface) mutateRelay(() => changeCityRelay(iface, value));
+            });
             edit.append(picker);
-            if (iface && peer) edit.append(relayButton('ذخیرهٔ تغییر', 'success', () => {
-                if (selected === current?.name) return;
-                mutateRelay(() => changeCityRelay(iface, selected));
-            }, relayBusy));
             card.append(edit);
             const editButton = relayIcon(iface ? 'ویرایش رله' : 'انتخاب رله', 'edit', 'info', () => {
                 edit.hidden = !edit.hidden;
                 editButton.setAttribute('aria-expanded', String(!edit.hidden));
+                picker.open = !edit.hidden;
                 if (!edit.hidden) picker.querySelector('summary').focus();
             }, relayBusy);
             editButton.setAttribute('aria-expanded', 'false');
@@ -5027,15 +5079,9 @@
         event.currentTarget.open = false;
         document.getElementById('relayCountryLabel').focus();
     });
-    document.getElementById('relayInstallFilter').addEventListener('change', () => {
-        relayPage = 0;
-        renderRelayManagement();
-    });
+    document.getElementById('relayInstallFilter').addEventListener('change', resetRelayPage);
     document.getElementById('relayRouterSync').addEventListener('click', () => void runRelayAction(loadInstalledRelays));
-    document.getElementById('relayCatalogSearch').addEventListener('input', () => {
-        relayPage = 0;
-        renderRelayManagement();
-    });
+    document.getElementById('relayCatalogSearch').addEventListener('input', resetRelayPage);
     document.getElementById('relayPagePrev').addEventListener('click', () => {
         relayPage = Math.max(0, relayPage - 1);
         renderRelayManagement();

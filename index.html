@@ -526,7 +526,8 @@
         .row-bad { background: rgba(239, 68, 68, 0.11); }
         .row-ok { background: rgba(16, 185, 129, 0.04); }
 
-        .relay-management > summary, .relay-settings-panel > summary { cursor: pointer; font-weight: 700; }
+        .relay-management > summary { cursor: pointer; font-weight: 700; }
+        .relay-settings-panel > h3 { margin: 0; font-size: 15px; }
         .relay-management > summary { font-size: 17px; }
         .relay-body { display: grid; gap: 14px; margin-top: 16px; min-width: 0; }
         .relay-settings-panel { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
@@ -535,7 +536,7 @@
         .relay-settings label { display: grid; gap: 6px; font-size: 13px; }
         .relay-toolbar { grid-template-columns: minmax(0, 1fr) minmax(130px, 190px) auto; }
         .relay-toolbar input, .relay-toolbar select, .relay-settings input { width: 100%; min-width: 0; }
-        .relay-controls, .relay-feedback, .relay-actions, .relay-pagination { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+        .relay-feedback, .relay-actions, .relay-pagination { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
         .relay-feedback { justify-content: space-between; color: var(--muted); font-size: 12px; }
         .relay-feedback span:empty { display: none; }
         #relayCatalogRows { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr)); gap: 12px; }
@@ -650,8 +651,8 @@
         <details class="card relay-management" id="relayManagement">
             <summary>مدیریت رله‌های Mullvad</summary>
             <div class="relay-body">
-                <details class="relay-settings-panel">
-                    <summary>تنظیمات WireGuard و منبع فهرست</summary>
+                <section class="relay-settings-panel" aria-label="تنظیمات WireGuard">
+                    <h3>تنظیمات WireGuard</h3>
                     <form id="relaySettings" class="relay-settings">
                         <label for="relayPrivateKey">کلید خصوصی WireGuard
                             <input type="password" id="relayPrivateKey" dir="ltr" autocomplete="new-password">
@@ -661,12 +662,7 @@
                         </label>
                         <button type="submit">ذخیرهٔ تنظیمات</button>
                     </form>
-                    <div class="relay-controls">
-                        <button type="button" id="relayCatalogSync">دریافت فهرست از Mullvad</button>
-                        <button type="button" id="relayCatalogImport">انتخاب فایل JSON</button>
-                        <input id="relayCatalogFile" type="file" accept=".json,application/json" hidden>
-                    </div>
-                </details>
+                </section>
                 <div class="relay-toolbar">
                     <input id="relayCatalogSearch" type="search" aria-label="جستجوی رله" placeholder="جستجوی کشور، شهر، نام رله یا IP">
                     <select id="relayInstallFilter" aria-label="فیلتر وضعیت نصب">
@@ -4838,10 +4834,6 @@
     async function refreshRelayCatalog(load, emptyMessage = '') {
         if (relayCatalogBusy) return;
         relayCatalogBusy = true;
-        const sync = document.getElementById('relayCatalogSync');
-        const file = document.getElementById('relayCatalogFile');
-        const importButton = document.getElementById('relayCatalogImport');
-        sync.disabled = file.disabled = importButton.disabled = true;
         relayCatalogStatus.textContent = 'در حال خواندن فهرست…';
         try {
             relayCatalog = await load();
@@ -4852,7 +4844,6 @@
             relayCatalogStatus.textContent = error.message;
         } finally {
             relayCatalogBusy = false;
-            sync.disabled = file.disabled = importButton.disabled = false;
         }
     }
 
@@ -4860,7 +4851,7 @@
         if (!relayManagement.open) return;
         renderRelayManagement();
         void refreshRelayCatalog(() => localDashboard('relays'),
-            'برای شروع، فهرست Mullvad را دریافت کنید یا فایل JSON را انتخاب کنید.');
+            'فهرست رله‌های محلی در دسترس نیست.');
         void localDashboard('wireguard').then(showRelaySettings)
             .catch(error => { relayStatus.textContent = error.message; });
         if (monitoring) void runRelayAction(loadInstalledRelays);
@@ -4871,25 +4862,9 @@
             key: relayKeyInput.value, address: relayAddressInput.value
         })));
     });
-    document.getElementById('relayCatalogSync').addEventListener('click', () => {
-        void refreshRelayCatalog(() => localDashboard('relays', {}));
-    });
-    document.getElementById('relayCatalogImport').addEventListener('click', () => {
-        document.getElementById('relayCatalogFile').click();
-    });
     document.getElementById('relayInstallFilter').addEventListener('change', () => {
         relayPage = 0;
         renderRelayManagement();
-    });
-    document.getElementById('relayCatalogFile').addEventListener('change', event => {
-        const input = event.currentTarget;
-        const file = input.files[0];
-        input.value = '';
-        if (!file) return;
-        void refreshRelayCatalog(async () => {
-            if (file.size > 2 * 1024 * 1024) throw new Error('فایل JSON بیشتر از ۲ مگابایت است.');
-            return localDashboard('relays', { relays: JSON.parse(await file.text()) });
-        });
     });
     document.getElementById('relayRouterSync').addEventListener('click', () => void runRelayAction(loadInstalledRelays));
     document.getElementById('relayCatalogSearch').addEventListener('input', () => {

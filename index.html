@@ -729,10 +729,10 @@
                             <option value="">همه</option><option value="vpn">Mullvad</option><option value="direct">اینترنت عادی</option>
                         </select>
                     </label>
-                    <label>وضعیت دستگاه
-                        <select id="clientStateFilter">
-                            <option value="">همه</option><option value="online">آنلاین</option><option value="offline">آفلاین</option>
-                        </select>
+                    <label class="switch" for="showOffline">
+                        <input type="checkbox" id="showOffline">
+                        <span class="switch-ui" aria-hidden="true"></span>
+                        <span>نمایش دستگاه‌های آفلاین</span>
                     </label>
                     <label class="switch" for="showWired">
                         <input type="checkbox" id="showWired">
@@ -2454,12 +2454,12 @@
     function visibleClientRows() {
         const query = document.getElementById('clientSearch').value;
         const route = document.getElementById('clientRouteFilter').value;
-        const state = document.getElementById('clientStateFilter').value;
+        const showOffline = document.getElementById('showOffline').checked;
         return latestClientRows.filter(row => {
             const lists = listsForIp(row.ip);
             if (!showWiredEnabled() && row.source === 'arp' && !lists.length) return false;
             if (route && (lists.length ? 'vpn' : 'direct') !== route) return false;
-            if (state && (row.offline && !row.here && !row.isTest ? 'offline' : 'online') !== state) return false;
+            if (!showOffline && row.offline && !row.here && !row.isTest) return false;
             return matchesFilter([clientDisplayName(row), row.host, row.ip, row.mac, row.kind, ...lists].join(' '), query);
         });
     }
@@ -3991,7 +3991,7 @@
         if (latestClientRows.length || monitoring) renderClientCards();
     });
     document.getElementById('clientSearch').addEventListener('input', renderClientCards);
-    for (const id of ['clientRouteFilter', 'clientStateFilter']) {
+    for (const id of ['clientRouteFilter', 'showOffline']) {
         document.getElementById(id).addEventListener('change', renderClientCards);
     }
     document.getElementById('clientCards').addEventListener('dblclick', event => {

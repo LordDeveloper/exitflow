@@ -1,5 +1,5 @@
 import json
-import dashboard_storage
+from src import storage
 import http.server
 import socketserver
 import ssl
@@ -58,7 +58,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 self.send_response(404)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.end_headers()
-                msg = "<h3>فایل HTML داشبورد پیدا نشد!</h3><p>فایل index.html را کنار index.py قرار دهید.</p>"
+                msg = "<h3>فایل HTML داشبورد پیدا نشد!</h3><p>فایل index.html را کنار server.py قرار دهید.</p>"
                 self.wfile.write(msg.encode("utf-8"))
                 return
 
@@ -126,14 +126,14 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 payload = json.loads(self.rfile.read(length))
                 if not isinstance(payload, dict):
                     raise ValueError("Expected a JSON object")
-            data = dashboard_storage.dispatch(self.path, method, payload)
+            data = storage.dispatch(self.path, method, payload)
             status = 200
         except LookupError:
             self.send_error(404)
             return
         except (ValueError, AttributeError) as error:
             data, status = {"error": str(error)}, 400
-        except dashboard_storage.CatalogFetchError as error:
+        except storage.CatalogFetchError as error:
             data, status = {"error": str(error)}, 502
         except OSError:
             data, status = {"error": "خواندن یا ذخیرهٔ دیتابیس محلی ناموفق بود. دسترسی پوشهٔ storage/database را بررسی کنید."}, 500

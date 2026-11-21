@@ -15,7 +15,7 @@ class CatalogFetchError(Exception):
     pass
 
 
-DB_PATH = Path(__file__).resolve().parent / "storage" / "database" / "exitflow.json"
+DB_PATH = Path(__file__).resolve().parents[1] / "storage" / "database" / "exitflow.json"
 LOCK = threading.Lock()
 
 

@@ -2095,12 +2095,19 @@
         if (wg) {
             setText(picker.querySelector('.peer-picker-name'), peerLabel(wg));
             setText(picker.querySelector('.peer-picker-meta'), peerMeta(wg));
+        } else if (value && !isPathPicker) {
+            setText(picker.querySelector('.peer-picker-name'), value);
+            setText(picker.querySelector('.peer-picker-meta'), 'اطلاعات Peer در فهرست فعلی موجود نیست');
         } else if (isPathPicker) {
             setText(picker.querySelector('.peer-picker-name'), 'انتخاب Peer...');
             setText(picker.querySelector('.peer-picker-meta'), wgInterfaces.length ? 'جستجو بر اساس کشور، شهر یا نام' : 'ابتدا به روتر متصل شوید');
         } else {
             setText(picker.querySelector('.peer-picker-name'), 'اینترنت عادی');
             setText(picker.querySelector('.peer-picker-meta'), 'بدون مولواد');
+        }
+        if (picker.dataset.draft === '1') {
+            const meta = picker.querySelector('.peer-picker-meta');
+            setText(meta, meta.textContent + ' · اعمال نشده');
         }
     }
 
@@ -2268,6 +2275,9 @@
     function choosePeer(picker, value) {
         const hidden = picker.querySelector('[data-field="peer-value"]');
         hidden.value = value || '';
+        if (picker.id !== 'pathTestPicker') {
+            picker.dataset.draft = hidden.value === picker.dataset.assigned ? '' : '1';
+        }
         closeAllPickers();
         paintPickerButton(picker, hidden.value);
     }
@@ -2580,12 +2590,9 @@
         setText(row.querySelector('[data-field="sess"]'), '⬇ ' + formatBytes(model.dl) + ' / ⬆ ' + formatBytes(model.ul));
         setText(row.querySelector('[data-field="conns"]'), model.count + ' کانکشن فعال');
         const picker = row.querySelector('.peer-picker');
-        if (!picker.dataset.ready) {
-            setPickerValue(picker, model.assigned, true);
-            picker.dataset.ready = '1';
-        } else {
-            setPickerValue(picker, pickerValue(picker), false);
-        }
+        picker.dataset.assigned = model.assigned;
+        if (pickerValue(picker) === model.assigned) delete picker.dataset.draft;
+        setPickerValue(picker, model.assigned, picker.dataset.draft !== '1');
     }
 
     function syncKeyed(container, keys, create, update) {
@@ -3156,10 +3163,9 @@
         if (!row) return;
         const picker = row.querySelector('.peer-picker');
         if (!picker) return;
-        const search = picker.querySelector('.peer-picker-search');
-        if (search && document.activeElement === search) return;
+        picker.dataset.assigned = value;
+        delete picker.dataset.draft;
         setPickerValue(picker, value, true);
-        picker.dataset.ready = '1';
     }
 
     function toggleLive() {

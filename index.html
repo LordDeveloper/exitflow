@@ -2459,7 +2459,7 @@
             const lists = listsForIp(row.ip);
             if (!showWiredEnabled() && row.source === 'arp' && !lists.length) return false;
             if (route && (lists.length ? 'vpn' : 'direct') !== route) return false;
-            if (!showOffline && row.offline && !row.here && !row.isTest) return false;
+            if (!showOffline && row.offline) return false;
             return matchesFilter([clientDisplayName(row), row.host, row.ip, row.mac, row.kind, ...lists].join(' '), query);
         });
     }
@@ -2686,7 +2686,7 @@
         row.dataset.test = model.isTest ? '1' : '';
         row.classList.toggle('is-self', Boolean(model.here));
         row.classList.toggle('is-test', Boolean(model.isTest));
-        row.classList.toggle('is-offline', Boolean(model.offline && !model.here && !model.isTest));
+        row.classList.toggle('is-offline', Boolean(model.offline));
         const testButton = row.querySelector('[data-action="test-device"]');
         const flushButton = row.querySelector('[data-action="flush"]');
         if (testButton) testButton.hidden = !model.isTest;
@@ -3005,7 +3005,6 @@
                     host: cleanHost(lease['host-name'] || lease.comment || ''),
                     mac: lease['mac-address'] || '',
                     leaseId: lease['.id'] || '',
-                    leaseStatus: lease.status || '',
                     dynamic: isTrue(lease.dynamic),
                     source: 'dhcp',
                     iface: ''
@@ -3067,21 +3066,6 @@
                     isTest: true
                 });
             }
-            const activeArpIps = new Set();
-            arpRows.forEach((row) => {
-                const ip = ipOnly(row.address);
-                if (!isIpv4(ip)) return;
-                const st = String(row.status || '').toLowerCase();
-                if (st && st !== 'incomplete' && st !== 'failed') activeArpIps.add(ip);
-            });
-            const activeConnIps = new Set();
-            connections.forEach((row) => {
-                const src = ipOnly(row['src-address']);
-                const dst = ipOnly(row['dst-address']);
-                if (isIpv4(src)) activeConnIps.add(src);
-                if (isIpv4(dst)) activeConnIps.add(dst);
-            });
-
             const clientRows = Array.from(lanClients.values());
             clientRows.forEach((row) => {
                 row.here = sessionIps.has(row.ip);
@@ -3092,13 +3076,7 @@
                     row.kind = ' · بدون کلاینت واقعی' + (row.iface ? ' · ' + row.iface : '');
                     return;
                 }
-                const leaseStatus = String(row.leaseStatus || '').toLowerCase();
-                const isOnline =
-                    row.here ||
-                    leaseStatus === 'bound' ||
-                    activeArpIps.has(row.ip) ||
-                    activeConnIps.has(row.ip);
-                row.offline = !isOnline;
+                row.offline = !clientTotals.get(row.ip)?.count;
 
                 if (!row.host) {
                     if (row.here) row.host = 'همین کامپیوتر';
@@ -3107,7 +3085,7 @@
                 }
                 const place = row.iface ? (' · ' + row.iface) : '';
                 const stateTag = row.offline ? ' · آفلاین' : '';
-                if (row.here) row.kind = ' · همین دستگاه' + place;
+                if (row.here) row.kind = ' · همین دستگاه' + place + stateTag;
                 else if (row.dynamic) row.kind = ' · پویا' + place + stateTag;
                 else if (row.source === 'arp') row.kind = ' · سیمی' + place + stateTag;
                 else row.kind = ' · استاتیک' + place + stateTag;

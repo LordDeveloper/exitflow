@@ -226,8 +226,6 @@
         tbody tr:hover { background: rgba(59, 130, 246, 0.06); }
         tbody tr.is-self { background: rgba(16, 185, 129, 0.1); }
         tbody tr.is-self:hover { background: rgba(16, 185, 129, 0.16); }
-        tbody tr.is-test { background: rgba(251, 191, 36, 0.1); }
-        tbody tr.is-test:hover { background: rgba(251, 191, 36, 0.16); }
         tbody tr.is-offline { background: rgba(239, 68, 68, 0.13); border-inline-start: 3px solid var(--red); }
         tbody tr.is-offline:hover { background: rgba(239, 68, 68, 0.2); }
         .section-loading { opacity: 0.72; transition: opacity 0.18s ease; }
@@ -548,11 +546,11 @@
         .relay-feedback, .relay-actions, .relay-pagination { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
         .relay-feedback { justify-content: space-between; color: var(--muted); font-size: 12px; }
         .relay-feedback span:empty { display: none; }
-        #relayCatalogRows { display: grid; grid-template-columns: minmax(0, 350px); gap: 12px; }
+        #relayCatalogRows { display: grid; grid-auto-rows: 1fr; grid-template-columns: minmax(0, 350px); gap: 12px; }
         @media (min-width: 681px) { #relayCatalogRows { grid-template-columns: repeat(2, minmax(0, 350px)); } }
         @media (min-width: 1280px) { #relayCatalogRows { grid-template-columns: repeat(4, minmax(0, 350px)); } }
         @media (min-width: 681px) and (max-width: 1000px) { .relay-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-        .relay-city { width: 100%; max-width: 350px; border: 1px solid #2b5549; border-radius: 13px; padding: 13px; min-width: 0; background: #14251f; position: relative; isolation: isolate; }
+        .relay-city { display: flex; flex-direction: column; width: 100%; max-width: 350px; border: 1px solid #2b5549; border-radius: 13px; padding: 13px; min-width: 0; background: #14251f; position: relative; isolation: isolate; }
         .relay-city::before { content: ''; position: absolute; z-index: -1; inset: 0 0 auto; height: 100px; border-radius: inherit; background: var(--relay-flag-image, none) center / cover; opacity: .2; filter: blur(8px); mask-image: linear-gradient(#000, transparent); pointer-events: none; }
         .relay-city[data-installed="false"] { border-color: var(--border); background: #172130; color: #c6d1e4; }
         .relay-city[data-installed="false"]::before { opacity: .12; filter: grayscale(.75) blur(8px); }
@@ -573,7 +571,9 @@
         .relay-metrics .relay-rx { color: #94e8ff; background: #173438; border-color: #2e6674; }
         .relay-metrics .relay-tx { color: #9cf0c4; background: #17362b; border-color: #30705a; }
         .relay-city h3 { margin: 0; font-size: 15px; }
-        .relay-peer { display: grid; gap: 8px; padding: 8px 0; }
+        .relay-peer { display: flex; flex-direction: column; gap: 8px; padding: 8px 0; }
+        .relay-city > .relay-peer { flex: 1; }
+        .relay-peer > footer { margin-top: auto; }
         .relay-peer + .relay-peer { border-top: 1px solid var(--border); }
         .relay-meta { color: var(--muted); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
         .relay-meta:empty { display: none; }
@@ -593,11 +593,10 @@
         .client-filters summary { cursor: pointer; font-weight: 700; }
         .client-filter-fields { display: grid; grid-template-columns: minmax(0, 2fr) 1fr 1fr auto; gap: 10px; align-items: end; margin-top: 10px; }
         .client-filter-fields > label:not(.switch) { display: grid; gap: 4px; color: var(--muted); font-size: 12px; }
-        .client-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: 12px; }
+        .client-cards { display: grid; grid-auto-rows: 1fr; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: 12px; }
         .client-cards > .empty { grid-column: 1 / -1; }
-        .client-card { display: grid; align-content: start; gap: 10px; padding: 13px; min-width: 0; background: #142032; border: 1px solid var(--border); border-radius: 12px; }
+        .client-card { display: flex; flex-direction: column; gap: 10px; padding: 13px; min-width: 0; background: #142032; border: 1px solid var(--border); border-radius: 12px; }
         .client-card.is-self { border-color: #317999; }
-        .client-card.is-test { border-color: #80652d; }
         .client-card.is-offline { border-inline-start: 3px solid #a84f55; }
         .client-card-header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
         .client-card-header > div { flex: 1 1 105px; display: grid; min-width: 0; overflow-wrap: anywhere; }
@@ -615,7 +614,7 @@
         .client-card .peer-option-name { display: flex; align-items: center; gap: 6px; }
         .client-change-status { margin: 0; font-size: 12px; color: var(--muted); }
         .client-change-status:empty { display: none; }
-        .client-card .relay-actions { border-color: var(--border); }
+        .client-card .relay-actions { margin-top: auto; border-color: var(--border); }
         .client-card .relay-icon[hidden] { display: none; }
         body.is-busy .client-card .relay-actions button, body.is-busy .client-card .peer-picker-btn { pointer-events: none; }
         @media (max-width: 750px) { .client-filter-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
@@ -1045,8 +1044,6 @@
     let addressLists = [];
     let dhcpLeases = [];
     let visibleClientCount = 0;
-    let testDeviceCache = null;
-    let testDeviceFailed = false;
     const peerTests = new Map();
     let prevIfaceStats = new Map();
     let prevClientBytes = new Map();
@@ -1083,94 +1080,6 @@
         const parts = String(ip || '').split('.');
         if (parts.length !== 4) return false;
         return parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255);
-    }
-
-    function ipv4ToInt(ip) {
-        return String(ip).split('.').reduce((acc, part) => ((acc << 8) + Number(part)) >>> 0, 0);
-    }
-
-    function intToIpv4(value) {
-        return [(value >>> 24) & 255, (value >>> 16) & 255, (value >>> 8) & 255, value & 255].join('.');
-    }
-
-    function isLanInterface(name) {
-        return !/^(mv-wg-|toTR|lo|pppoe|wan|lte|sit)/i.test(String(name || ''));
-    }
-
-    function parseLanAddress(row) {
-        const match = String(row.address || '').trim().match(/^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/);
-        if (!match || !isPrivateLan(match[1]) || !isLanInterface(row.interface)) return null;
-        const bits = Number(match[2]);
-        if (bits < 16 || bits > 30) return null;
-        return { ip: match[1], bits, iface: row.interface };
-    }
-
-    function pickTestIp(routerAddrs, usedIps) {
-        const lans = routerAddrs
-            .filter((row) => !isTrue(row.disabled))
-            .map(parseLanAddress)
-            .filter(Boolean)
-            .sort((a, b) => b.bits - a.bits);
-        for (const lan of lans) {
-            const base = ipv4ToInt(lan.ip) & ((bitsMask(lan.bits)) >>> 0);
-            const size = 2 ** (32 - lan.bits);
-            for (let host = 250; host >= 20; host -= 1) {
-                if (host >= size - 1) continue;
-                const candidate = intToIpv4((base + host) >>> 0);
-                if (!isPrivateLan(candidate) || candidate === lan.ip || usedIps.has(candidate)) continue;
-                return { ip: candidate, iface: lan.iface };
-            }
-        }
-        return null;
-    }
-
-    function bitsMask(bits) {
-        if (bits <= 0) return 0;
-        return (0xffffffff << (32 - bits)) >>> 0;
-    }
-
-    async function ensureTestAddress(routerAddrs, usedIps) {
-        const existing = routerAddrs.find((row) => String(row.comment || '') === 'exitflow-test' && !isTrue(row.disabled));
-        if (existing && isIpv4(ipOnly(existing.address))) {
-            return { ip: ipOnly(existing.address), iface: existing.interface || '' };
-        }
-        if (testDeviceCache && isIpv4(testDeviceCache.ip)) return testDeviceCache;
-        const picked = pickTestIp(routerAddrs, usedIps);
-        if (!picked) return null;
-        try {
-            await apiFetch('/ip/address', 'PUT', {
-                address: picked.ip + '/32',
-                interface: picked.iface,
-                comment: 'exitflow-test'
-            });
-        } catch (err) {
-            if (!/already/i.test(err.message)) throw err;
-        }
-        testDeviceCache = picked;
-        return picked;
-    }
-
-    async function syncTestMark(ip, peerName) {
-        const rules = await apiList('/ip/firewall/mangle?.proplist=.id,chain,src-address,new-routing-mark,routing-mark,disabled,comment');
-        const mine = rules.filter((rule) => rule.chain === 'output' && sameIp(rule['src-address'], ip) && String(rule.comment || '') === 'exitflow-test' && rule['.id']);
-        if (!peerName) {
-            for (const rule of mine) await deleteById('/ip/firewall/mangle', rule['.id']);
-            return;
-        }
-        const keep = mine.find((rule) => markOf(rule) === peerName && !isTrue(rule.disabled));
-        for (const rule of mine) {
-            if (!keep || rule['.id'] !== keep['.id']) await deleteById('/ip/firewall/mangle', rule['.id']);
-        }
-        if (!keep) {
-            await apiFetch('/ip/firewall/mangle', 'PUT', {
-                chain: 'output',
-                action: 'mark-routing',
-                'src-address': ip,
-                'new-routing-mark': peerName,
-                passthrough: 'no',
-                comment: 'exitflow-test'
-            });
-        }
     }
 
     function isPrivateLan(ip) {
@@ -2482,7 +2391,6 @@
                 dynamic: row.dynamic,
                 here: row.here,
                 offline: Boolean(row.offline),
-                isTest: Boolean(row.isTest),
                 source: row.source,
                 kind: row.kind,
                 assigned: lists[0] || '',
@@ -2649,7 +2557,6 @@
         const footer = row.querySelector('footer');
         for (const [action, title, icon, style] of [
             ['ping-client', 'پینگ دستگاه', 'ping', 'info'],
-            ['test-device', 'تست دستگاه', 'trace', 'info'],
             ['flush', 'ریست اتصال‌ها', 'restart', 'warning'],
             ['disconnect', 'قطع Mullvad', 'power', 'danger']
         ]) {
@@ -2660,7 +2567,7 @@
         return row;
     }
 
-    function paintClientDevice(el, host, isTest) {
+    function paintClientDevice(el, host) {
         const patterns = [
             [/iphone|android|galaxy|samsung|pixel|xiaomi|redmi|huawei|s\d{2}[- ]?ultra/i, 'گوشی', 'M7 2h10v20H7z M11 18h2'],
             [/ipad|tablet/i, 'تبلت', 'M4 3h16v18H4z M10 17h4'],
@@ -2668,8 +2575,8 @@
             [/macbook|laptop|desktop|windows|thinkpad|imac/i, 'رایانه', 'M3 4h18v13H3z M12 17v4 M8 21h8'],
             [/smart.?tv|bravia|chromecast/i, 'تلویزیون', 'M3 6h18v13H3z M8 3l4 3 4-3']
         ];
-        const match = !isTest && patterns.find(([pattern]) => pattern.test(host));
-        const label = isTest ? 'دستگاه تست' : match ? `${match[1]}، بر اساس نام دستگاه` : 'دستگاه شبکه';
+        const match = patterns.find(([pattern]) => pattern.test(host));
+        const label = match ? `${match[1]}، بر اساس نام دستگاه` : 'دستگاه شبکه';
         if (el.title === label) return;
         el.title = label;
         el.setAttribute('aria-label', label);
@@ -2683,15 +2590,9 @@
         row.dataset.leaseId = model.leaseId || '';
         row.dataset.dynamic = model.dynamic ? 'true' : 'false';
         row.dataset.host = model.host;
-        row.dataset.test = model.isTest ? '1' : '';
         row.classList.toggle('is-self', Boolean(model.here));
-        row.classList.toggle('is-test', Boolean(model.isTest));
         row.classList.toggle('is-offline', Boolean(model.offline));
-        const testButton = row.querySelector('[data-action="test-device"]');
-        const flushButton = row.querySelector('[data-action="flush"]');
-        if (testButton) testButton.hidden = !model.isTest;
-        if (flushButton) flushButton.hidden = Boolean(model.isTest);
-        paintClientDevice(row.querySelector('[data-field="device"]'), model.host, model.isTest);
+        paintClientDevice(row.querySelector('[data-field="device"]'), model.host);
         const nameButton = row.querySelector('[data-field="host"]');
         const name = clientDisplayName(model);
         setText(nameButton, name);
@@ -3045,37 +2946,9 @@
                     iface: ''
                 });
             });
-            const usedIps = new Set(routerIps);
-            lanClients.forEach((_, ip) => usedIps.add(ip));
-            let testDevice = null;
-            try {
-                testDevice = await ensureTestAddress(routerAddrs, usedIps);
-            } catch (err) {
-                testDeviceFailed = true;
-            }
-            if (testDevice && isIpv4(testDevice.ip)) {
-                testDeviceCache = testDevice;
-                lanClients.set(testDevice.ip, {
-                    ip: testDevice.ip,
-                    host: 'دستگاه تست',
-                    mac: '',
-                    leaseId: '',
-                    dynamic: false,
-                    source: 'test',
-                    iface: testDevice.iface || '',
-                    isTest: true
-                });
-            }
             const clientRows = Array.from(lanClients.values());
             clientRows.forEach((row) => {
                 row.here = sessionIps.has(row.ip);
-                if (row.isTest) {
-                    row.here = false;
-                    row.offline = false;
-                    row.host = 'دستگاه تست';
-                    row.kind = ' · بدون کلاینت واقعی' + (row.iface ? ' · ' + row.iface : '');
-                    return;
-                }
                 row.offline = !clientTotals.get(row.ip)?.count;
 
                 if (!row.host) {
@@ -3090,7 +2963,7 @@
                 else if (row.source === 'arp') row.kind = ' · سیمی' + place + stateTag;
                 else row.kind = ' · استاتیک' + place + stateTag;
             });
-            clientRows.sort((a, b) => Number(Boolean(b.isTest)) - Number(Boolean(a.isTest)) || Number(b.here) - Number(a.here) || a.host.localeCompare(b.host, 'fa'));
+            clientRows.sort((a, b) => Number(b.here) - Number(a.here) || a.host.localeCompare(b.host, 'fa'));
             latestClientRows = clientRows;
             renderClientCards();
             updateSummaryStatus();
@@ -3240,33 +3113,6 @@
         return document.querySelector(`#clientCards [data-key="${CSS.escape(ip)}"]`);
     }
 
-    async function testAssignedDevice(ip) {
-        if (busy) return;
-        const row = rowOf(ip);
-        if (!row) return;
-        const target = selectedPeer(row);
-        if (!/^mv-wg-/.test(target)) {
-            setStatus('برای دستگاه تست یک Peer مولواد انتخاب کن.', true);
-            return;
-        }
-        setBusy(true);
-        try {
-            setStatus(`دستگاه تست روی ${target} سه بسته می‌فرستد...`);
-            await assignClient(ip, target, 'دستگاه تست', '', false);
-            await syncTestMark(ip, target);
-            await testPeerPath(target, ip);
-            const info = peerTests.get(target);
-            resetSpeedWindow();
-            await refreshAll();
-            syncSelectValue(ip, target);
-            setStatus(info ? `${target} — ${info.text}` : 'تست تمام شد', Boolean(info && info.state === 'fail'));
-        } catch (err) {
-            setStatus('خطا هنگام تست: ' + err.message, true);
-        } finally {
-            setBusy(false);
-        }
-    }
-
     async function applyClient(ip) {
         const row = rowOf(ip);
         if (!row) return;
@@ -3286,7 +3132,6 @@
         try {
             setStatus(target ? `در حال اتصال ${ip} به ${target}...` : `در حال بازگرداندن ${ip} به اینترنت عادی...`);
             const result = await assignClient(ip, target, host, leaseId, isDynamic);
-            if (row.dataset.test === '1') await syncTestMark(ip, target);
             resetSpeedWindow();
             await refreshAll();
             syncSelectValue(ip, target);
@@ -3312,7 +3157,6 @@
         try {
             setStatus(`در حال قطع مولواد برای ${host} (${ip})...`);
             const result = await assignClient(ip, '', host, '', false);
-            if (row && row.dataset.test === '1') await syncTestMark(ip, '');
             resetSpeedWindow();
             await refreshAll();
             syncSelectValue(ip, '');
@@ -4006,7 +3850,6 @@
         if (button.dataset.action === 'ping-client') openClientPingModal(ip, row.dataset.host || ip);
         else if (button.dataset.action === 'flush') flushOnly(ip);
         else if (button.dataset.action === 'disconnect') disconnectClient(ip);
-        else if (button.dataset.action === 'test-device') testAssignedDevice(ip);
     });
     document.getElementById('clientCards').addEventListener('input', (event) => {
         if (!event.target.classList.contains('peer-picker-search')) return;

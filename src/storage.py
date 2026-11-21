@@ -123,7 +123,10 @@ def dispatch(path, method, payload):
                     raise ValueError("Enter a valid WireGuard private key and IPv4 address with prefix.") from None
                 db["wireguard"] = {"address": address, "key": key}
                 write_database(db)
-                return {"address": address, "hasKey": True}
+                result = {"address": address, "hasKey": True}
+                if payload.get("includeKey") is True:
+                    result["key"] = key
+                return result
         if path == "/dashboard/provision" and method == "POST":
             if not settings.get("key"):
                 raise ValueError("Save your WireGuard settings first.")

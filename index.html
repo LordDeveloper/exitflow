@@ -560,7 +560,11 @@
         .relay-meta:empty { display: none; }
         .relay-edit { min-width: 0; }
         .relay-edit select { max-width: 100%; margin: 6px; }
-        .relay-actions button { width: auto; padding: 6px 10px; font-size: 12px; }
+        .relay-actions { border-top: 1px solid #335047; padding-top: 8px; }
+        .relay-actions:empty { display: none; }
+        .relay-actions .relay-icon { display: inline-grid; place-items: center; width: 34px; height: 34px; padding: 0; }
+        .relay-icon svg { width: 17px; height: 17px; }
+        .relay-edit[hidden] { display: none; }
         .relay-pagination { justify-content: center; }
         @media (max-width: 680px) {
             .relay-settings, .relay-toolbar { grid-template-columns: minmax(0, 1fr); }
@@ -4384,6 +4388,23 @@
         return button;
     }
 
+    function relayIcon(label, icon, style, action, disabled = false) {
+        const paths = {
+            power: 'M12 2v10 M6 5a9 9 0 1 0 12 0',
+            ping: 'M2 12h5l3-7 4 14 3-7h5',
+            trace: 'M5 6h14 M5 12h10 M5 18h6 M2 6h.01 M2 12h.01 M2 18h.01',
+            restart: 'M20 7v5h-5 M20 12a8 8 0 1 0-2 5',
+            remove: 'M3 6h18 M9 6V3h6v3 M6 6l1 15h10l1-15 M10 10v7 M14 10v7',
+            edit: 'M4 16l-1 5 5-1L21 7l-4-4z M14 6l4 4',
+            install: 'M12 3v12 M7 10l5 5 5-5 M4 16v5h16v-5'
+        };
+        const button = relayButton(label, style + ' relay-icon', action, disabled);
+        button.title = label;
+        button.setAttribute('aria-label', label);
+        button.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${paths[icon]}"/></svg>`;
+        return button;
+    }
+
     function renderRelayManagement() {
         const query = document.getElementById('relayCatalogSearch').value.trim().toLowerCase();
         const filter = document.getElementById('relayInstallFilter').value;
@@ -4459,7 +4480,7 @@
         titleRow.className = 'relay-peer-title';
         titleRow.append(title, state);
         card.append(titleRow);
-        const actions = document.createElement('div');
+        const actions = document.createElement('footer');
         actions.className = 'relay-actions';
         if (iface) {
             card.dataset.relayInterface = iface.name;
@@ -4477,30 +4498,27 @@
             result.setAttribute('role', 'status');
             card.append(stats, result);
             actions.append(
-                relayButton(disabled ? 'فعال' : 'غیرفعال', 'info', () => mutateRelay(async () => {
+                relayIcon(disabled ? 'فعال' : 'غیرفعال', 'power', 'info', () => mutateRelay(async () => {
                     await apiFetch('/interface/wireguard/' + assertId(iface['.id']), 'PATCH', { disabled: disabled ? 'no' : 'yes' });
                 }), relayBusy),
-                relayButton('پینگ', 'info', () => {
+                relayIcon('پینگ', 'ping', 'info', () => {
                     void testPeerPath(iface.name).finally(updateRelayCardStats);
                     updateRelayCardStats();
                 }, disabled || relayBusy),
-                relayButton('MTR و عیب‌یابی', 'info', () => openDiagnoseModal(iface.name), relayBusy),
-                relayButton('راه‌اندازی مجدد', 'info', () => mutateRelay(() => restartPeerInterface(iface.name)), relayBusy || Boolean(disabled))
+                relayIcon('MTR و عیب‌یابی', 'trace', 'info', () => openDiagnoseModal(iface.name), relayBusy),
+                relayIcon('راه‌اندازی مجدد', 'restart', 'info', () => mutateRelay(() => restartPeerInterface(iface.name)), relayBusy || Boolean(disabled))
             );
-            if (iface.name.startsWith('mv-wg-')) actions.append(relayButton('حذف', 'danger', () => {
+            if (iface.name.startsWith('mv-wg-')) actions.append(relayIcon('حذف', 'remove', 'danger', () => {
                     if (window.confirm('با حذف این رله، تخصیص کلاینت‌های آن پاک می‌شود. ادامه می‌دهید؟')) {
                         mutateRelay(() => removeCatalogRelay(iface));
                     }
                 }, relayBusy));
         }
-        card.append(actions);
-
         const choices = relays.filter(relay => relay.ip && (!iface || peer || 'mv-wg-' + relay.name === iface.name));
         if (installedRelays && choices.length) {
-            const edit = document.createElement('details');
+            const edit = document.createElement('div');
             edit.className = 'relay-edit';
-            const summary = document.createElement('summary');
-            summary.textContent = iface && peer ? 'ویرایش رله' : 'انتخاب و افزودن رله';
+            edit.hidden = true;
             const select = document.createElement('select');
             select.setAttribute('aria-label', 'رلهٔ شهر');
             for (const relay of choices) {
@@ -4509,14 +4527,28 @@
                 option.textContent = relay.name + (relay.active ? '' : ' · غیرفعال در Mullvad');
                 select.append(option);
             }
-            select.value = current?.name || choices.find(relay => relay.active)?.name || choices[0].name;
-            edit.append(summary, select, relayButton(iface ? 'ذخیرهٔ تغییر' : 'افزودن', 'success', () => {
+            select.value = current?.name || choices[0].name;
+            edit.append(select, relayButton(iface ? 'ذخیرهٔ تغییر' : 'افزودن', 'success', () => {
                 const name = select.value;
                 if (iface && name === current?.name) return;
                 mutateRelay(() => iface && peer ? changeCityRelay(iface, name) : installCatalogRelay(name));
             }, relayBusy));
             card.append(edit);
+            const editButton = relayIcon(iface ? 'ویرایش رله' : 'انتخاب رله', 'edit', 'info', () => {
+                edit.hidden = !edit.hidden;
+                editButton.setAttribute('aria-expanded', String(!edit.hidden));
+                if (!edit.hidden) select.focus();
+            }, relayBusy);
+            editButton.setAttribute('aria-expanded', 'false');
+            actions.append(editButton);
+            if (!iface) {
+                const first = choices[0];
+                actions.append(relayIcon('نصب ' + first.name, 'install', 'success', () => {
+                    mutateRelay(() => installCatalogRelay(first.name));
+                }, relayBusy));
+            }
         }
+        card.append(actions);
         return card;
     }
 
@@ -4575,8 +4607,8 @@
         relayStatus.textContent = 'در حال انجام…';
         renderRelayManagement();
         try {
-            await action();
-            relayStatus.textContent = 'انجام شد';
+            const message = await action();
+            relayStatus.textContent = message || 'انجام شد';
         } catch (error) {
             relayStatus.textContent = error.message;
         } finally {
@@ -4696,11 +4728,54 @@
         }
         if (monitoring && !installedRelays) void runRelayAction(loadInstalledRelays);
     }
+    async function saveAndApplyRelaySettings() {
+        const key = relayKeyInput.value.trim();
+        const address = relayAddressInput.value.trim();
+        const previous = await localDashboard('wireguard');
+        let plans = [];
+        if (monitoring) {
+            const [ifaces, addresses] = await Promise.all([
+                apiList('/interface/wireguard?.proplist=.id,name'),
+                apiList('/ip/address?.proplist=.id,interface,address,dynamic')
+            ]);
+            plans = ifaces.filter(iface => iface.name.startsWith('mv-wg-')).map(iface => {
+                const rows = addresses.filter(row => row.interface === iface.name && !isTrue(row.dynamic) && isIpv4(ipOnly(row.address)));
+                const previousRow = rows.find(row => row.address === previous.address);
+                const target = previousRow || (rows.length === 1 ? rows[0] : null);
+                if (!rows.some(row => row.address === address) && !target && rows.length) {
+                    throw new Error(`آدرس تونل ${iface.name} بین چند آدرس مشخص نیست`);
+                }
+                return { iface, rows, target };
+            });
+        }
+        const saved = await localDashboard('wireguard', { key, address, includeKey: plans.length > 0 });
+        const failures = [];
+        for (const { iface, rows, target } of plans) {
+            try {
+                await apiFetch('/interface/wireguard/' + assertId(iface['.id']), 'PATCH', { 'private-key': saved.key });
+                if (!rows.some(row => row.address === saved.address)) {
+                    if (target) {
+                        await apiFetch('/ip/address/' + assertId(target['.id']), 'PATCH', { address: saved.address });
+                    } else {
+                        await apiFetch('/ip/address', 'PUT', { interface: iface.name, address: saved.address });
+                    }
+                }
+            } catch {
+                failures.push(iface.name);
+            }
+        }
+        if (plans.length) void refreshAll().catch(error => setPollStatus(error.message));
+        if (failures.length) {
+            throw new Error(`تنظیمات محلی ذخیره شد، اما اعمال روی این اینترفیس‌ها ناموفق بود: ${failures.join('، ')}`);
+        }
+        showRelaySettings(saved);
+        return monitoring ? `ذخیره شد؛ ${plans.length} اینترفیس Mullvad بررسی شد`
+            : 'محلی ذخیره شد؛ برای اعمال روی روتر متصل شوید و دوباره ذخیره کنید';
+    }
+
     document.getElementById('relaySettings').addEventListener('submit', event => {
         event.preventDefault();
-        void runRelayAction(async () => showRelaySettings(await localDashboard('wireguard', {
-            key: relayKeyInput.value, address: relayAddressInput.value
-        })));
+        void runRelayAction(saveAndApplyRelaySettings);
     });
     document.getElementById('relayInstallFilter').addEventListener('change', () => {
         relayPage = 0;

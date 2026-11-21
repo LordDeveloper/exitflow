@@ -1,5 +1,6 @@
 import json
 import re
+import sqlite3
 from src import storage
 import http.server
 import socketserver
@@ -141,7 +142,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             data, status = {"error": str(error)}, 400
         except storage.CatalogFetchError as error:
             data, status = {"error": str(error)}, 502
-        except OSError:
+        except (OSError, sqlite3.Error):
             data, status = {"error": "خواندن یا ذخیرهٔ دیتابیس محلی ناموفق بود. دسترسی پوشهٔ storage/database را بررسی کنید."}, 500
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
@@ -202,6 +203,11 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(f"Router Connection Error: {e}".encode("utf-8"))
 
 def run():
+    try:
+        storage.initialize_database()
+    except (OSError, sqlite3.Error, ValueError) as error:
+        raise SystemExit(f"Database initialization failed: {error}") from None
+
     port = START_PORT
     server = None
     while port < START_PORT + 20:

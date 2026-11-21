@@ -1,12 +1,13 @@
 import base64
 import binascii
+from contextlib import closing
+import hashlib
 import ipaddress
 import json
 import os
 from pathlib import Path
 import re
-import tempfile
-import threading
+import sqlite3
 import urllib.request
 
 from generator import URL
@@ -15,38 +16,69 @@ class CatalogFetchError(Exception):
     pass
 
 
-DB_PATH = Path(__file__).resolve().parents[1] / "storage" / "database" / "exitflow.json"
+DB_PATH = Path(__file__).resolve().parents[1] / "storage" / "database" / "exitflow.sqlite"
 CATALOG_PATH = DB_PATH.parents[1] / "relays.json"
-LOCK = threading.Lock()
 
 
-def read_database():
-    try:
-        return json.loads(DB_PATH.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        for legacy_name in ("exitnode.json", "db.json"):
-            try:
-                DB_PATH.with_name(legacy_name).rename(DB_PATH)
-            except FileNotFoundError:
-                continue
-            except FileExistsError:
-                pass
-            break
-        try:
-            return json.loads(DB_PATH.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            return {}
+def connect_database():
+    return sqlite3.connect(DB_PATH, timeout=10)
 
 
-def write_database(db):
+def initialize_database():
     DB_PATH.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=DB_PATH.parent, delete=False) as file:
+    os.close(os.open(DB_PATH, os.O_CREAT | os.O_WRONLY, 0o600))
+    with closing(connect_database()) as connection:
+        with connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute("CREATE TABLE IF NOT EXISTS settings (name TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            connection.execute("CREATE TABLE IF NOT EXISTS migrations (filename TEXT PRIMARY KEY, digest TEXT NOT NULL)")
+            applied = {name for (name,) in connection.execute("SELECT filename FROM migrations")}
+            for filename in ("exitflow.json", "exitnode.json", "db.json"):
+                if filename != "exitflow.json" and applied and filename not in applied:
+                    continue
+                legacy_path = DB_PATH.with_name(filename)
+                try:
+                    raw = legacy_path.read_bytes()
+                except FileNotFoundError:
+                    continue
+                digest = hashlib.sha256(raw).hexdigest()
+                migrated = connection.execute(
+                    "SELECT digest FROM migrations WHERE filename = ?", (filename,)
+                ).fetchone()
+                if migrated != (digest,):
+                    try:
+                        data = json.loads(raw)
+                    except ValueError as error:
+                        raise ValueError(f"{filename} is not valid JSON") from error
+                    if not isinstance(data, dict):
+                        raise ValueError(f"{filename} must contain a JSON object")
+                    existing = read_database(connection)
+                    if any(key in existing and existing[key] != value for key, value in data.items()):
+                        raise ValueError(f"{filename} conflicts with settings already stored in SQLite")
+                    write_database(connection, data)
+                    connection.execute(
+                        "INSERT OR REPLACE INTO migrations (filename, digest) VALUES (?, ?)", (filename, digest)
+                    )
+                break
+            else:
+                return
+        # Remove only the version that was successfully committed.
         try:
-            json.dump(db, file, ensure_ascii=False)
-            file.close()
-            os.replace(file.name, DB_PATH)
-        finally:
-            Path(file.name).unlink(missing_ok=True)
+            if legacy_path.read_bytes() == raw:
+                legacy_path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def read_database(connection):
+    return {name: json.loads(value) for name, value in connection.execute("SELECT name, value FROM settings")}
+
+
+def write_database(connection, values):
+    connection.executemany(
+        "INSERT OR REPLACE INTO settings (name, value) VALUES (?, ?)",
+        ((name, json.dumps(value, ensure_ascii=False)) for name, value in values.items()),
+    )
 
 
 def load_catalog():
@@ -99,13 +131,13 @@ def current_catalog(db):
 def dispatch(path, method, payload):
     if path == "/dashboard/relays" and method == "POST":
         catalog = normalize_catalog(payload["relays"]) if "relays" in payload else load_catalog()
-        with LOCK:
-            db = read_database()
-            db["relay_catalog_override"] = catalog
-            write_database(db)
+        with closing(connect_database()) as connection, connection:
+            write_database(connection, {"relay_catalog_override": catalog})
         return catalog
-    with LOCK:
-        db = read_database()
+    with closing(connect_database()) as connection, connection:
+        if method == "POST":
+            connection.execute("BEGIN IMMEDIATE")
+        db = read_database(connection)
         settings = db.get("wireguard", {})
         if path == "/dashboard/client-names":
             names = db.get("client_names", {})
@@ -127,8 +159,7 @@ def dispatch(path, method, payload):
                     names[identity] = name
                 else:
                     names.pop(identity, None)
-                db["client_names"] = names
-                write_database(db)
+                write_database(connection, {"client_names": names})
                 return {"identity": identity, "name": name}
         if path == "/dashboard/relays" and method == "GET":
             return current_catalog(db)
@@ -144,8 +175,7 @@ def dispatch(path, method, payload):
                     address = str(ipaddress.IPv4Interface(address))
                 except (ValueError, binascii.Error):
                     raise ValueError("Enter a valid WireGuard private key and IPv4 address with prefix.") from None
-                db["wireguard"] = {"address": address, "key": key}
-                write_database(db)
+                write_database(connection, {"wireguard": {"address": address, "key": key}})
                 result = {"address": address, "hasKey": True}
                 if payload.get("includeKey") is True:
                     result["key"] = key

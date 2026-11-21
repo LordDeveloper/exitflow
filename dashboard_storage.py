@@ -11,7 +11,7 @@ import urllib.request
 
 from generator import URL
 
-DB_PATH = Path(__file__).resolve().parent / "storage" / "database" / "exitnode.json"
+DB_PATH = Path(__file__).resolve().parent / "storage" / "database" / "exitflow.json"
 LOCK = threading.Lock()
 
 
@@ -19,13 +19,14 @@ def read_database():
     try:
         return json.loads(DB_PATH.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        legacy_path = DB_PATH.with_name("db.json")
-        try:
-            legacy_path.rename(DB_PATH)
-        except FileNotFoundError:
-            pass
-        except FileExistsError:
-            pass
+        for legacy_name in ("exitnode.json", "db.json"):
+            try:
+                DB_PATH.with_name(legacy_name).rename(DB_PATH)
+            except FileNotFoundError:
+                continue
+            except FileExistsError:
+                pass
+            break
         try:
             return json.loads(DB_PATH.read_text(encoding="utf-8"))
         except FileNotFoundError:

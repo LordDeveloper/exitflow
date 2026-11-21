@@ -1,4 +1,5 @@
 import json
+import re
 from src import storage
 import http.server
 import socketserver
@@ -78,6 +79,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self.handle_proxy("GET")
         elif self.path.split("?", 1)[0].startswith("/fonts/"):
             self.serve_font()
+        elif re.fullmatch(r"/flags/[a-z]{2}\.png", self.path):
+            self.serve_asset("assets/flags", self.path.rsplit("/", 1)[1], "image/png")
         else:
             self.send_error(404)
 
@@ -86,15 +89,18 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         if not name.endswith(".woff2"):
             self.send_error(404)
             return
+        self.serve_asset("fonts", name, "font/woff2")
+
+    def serve_asset(self, directory, name, content_type):
         root = os.path.dirname(os.path.abspath(__file__))
-        full = os.path.join(root, "fonts", name)
+        full = os.path.join(root, directory, name)
         if not os.path.isfile(full):
             self.send_error(404)
             return
         with open(full, "rb") as handle:
             data = handle.read()
         self.send_response(200)
-        self.send_header("Content-Type", "font/woff2")
+        self.send_header("Content-Type", content_type)
         self.send_header("Cache-Control", "public, max-age=604800")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()

@@ -533,16 +533,28 @@
         .relay-settings, .relay-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 10px; align-items: end; }
         .relay-settings { margin: 12px 0; }
         .relay-settings label { display: grid; gap: 6px; font-size: 13px; }
-        .relay-toolbar { grid-template-columns: minmax(0, 1fr) minmax(130px, 190px) auto; }
+        .relay-toolbar { grid-template-columns: minmax(150px, 2fr) repeat(3, minmax(118px, 1fr)) auto; }
+        .relay-country-picker { position: relative; min-width: 0; }
+        .relay-country-picker summary, .relay-country-options button { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+        .relay-country-picker summary { border: 1px solid var(--border); border-radius: 8px; padding: 8px; background: #101a28; }
+        .relay-country-picker summary::after { content: '▾'; margin-inline-start: auto; }
+        .relay-country-options { position: absolute; z-index: 5; inset-inline: 0; top: 100%; max-height: 240px; overflow: auto; background: #101a28; border: 1px solid var(--border); border-radius: 8px; padding: 4px; }
+        .relay-country-options button { width: 100%; background: transparent; padding: 7px; text-align: start; }
+        .relay-country-options button:focus-visible, .relay-country-options button[aria-pressed="true"] { background: #253850; }
+        .relay-pagination select { width: auto; }
+        #relayPageNumbers { display: flex; gap: 4px; }
+        #relayPageNumbers button[aria-current="page"] { background: #27624d; }
         .relay-toolbar input, .relay-toolbar select, .relay-settings input { width: 100%; min-width: 0; }
         .relay-feedback, .relay-actions, .relay-pagination { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
         .relay-feedback { justify-content: space-between; color: var(--muted); font-size: 12px; }
         .relay-feedback span:empty { display: none; }
-        #relayCatalogRows { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr)); gap: 12px; }
-        .relay-city { border: 1px solid #2b5549; border-radius: 13px; padding: 13px; min-width: 0; background: #14251f; }
+        #relayCatalogRows { display: grid; grid-template-columns: minmax(0, 350px); gap: 12px; }
+        @media (min-width: 681px) { #relayCatalogRows { grid-template-columns: repeat(2, minmax(0, 350px)); } }
+        @media (min-width: 1280px) { #relayCatalogRows { grid-template-columns: repeat(4, minmax(0, 350px)); } }
+        @media (min-width: 681px) and (max-width: 1000px) { .relay-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+        .relay-city { width: 100%; max-width: 350px; border: 1px solid #2b5549; border-radius: 13px; padding: 13px; min-width: 0; background: #14251f; }
         .relay-city-header { display: flex; align-items: center; gap: 8px; border-radius: 8px; padding: 7px 9px; background: linear-gradient(120deg, #213a2d, #15222b); }
-        .relay-flag { font-size: 20px; line-height: 1; }
-        .relay-flag:empty { display: none; }
+        .relay-flag { width: 26px; height: 17px; object-fit: contain; flex: 0 0 auto; }
         .relay-peer-title { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; overflow-wrap: anywhere; }
         .relay-state { border-radius: 20px; background: #263249; color: #c6d1e4; padding: 3px 8px; font-size: 12px; white-space: nowrap; }
         .relay-state[data-state="on"] { background: #1e4432; color: #87ecb8; }
@@ -681,6 +693,11 @@
                 </section>
                 <div class="relay-toolbar">
                     <input id="relayCatalogSearch" type="search" aria-label="جستجوی رله" placeholder="جستجوی کشور، شهر، نام رله یا IP">
+                    <details id="relayCountryPicker" class="relay-country-picker">
+                        <summary id="relayCountryLabel" aria-label="فیلتر کشور">همهٔ کشورها</summary>
+                        <div id="relayCountryOptions" class="relay-country-options"></div>
+                    </details>
+                    <select id="relayCityFilter" aria-label="فیلتر شهر"><option value="">همهٔ شهرها</option></select>
                     <select id="relayInstallFilter" aria-label="فیلتر وضعیت نصب">
                         <option value="">همهٔ شهرها</option>
                         <option value="installed">نصب‌شده روی روتر</option>
@@ -695,7 +712,13 @@
                 <div id="relayCatalogRows"></div>
                 <nav class="relay-pagination" aria-label="صفحه‌بندی رله‌ها">
                     <button type="button" id="relayPagePrev">قبلی</button>
-                    <span id="relayPageCount"></span>
+                    <span id="relayPageNumbers"></span>
+                    <span id="relayPageCount" aria-live="polite"></span>
+                    <label for="relayPageSize">تعداد در صفحه</label>
+                    <select id="relayPageSize">
+                        <option value="8">۸</option><option value="16">۱۶</option>
+                        <option value="30" selected>۳۰</option><option value="60">۶۰</option>
+                    </select>
                     <button type="button" id="relayPageNext">بعدی</button>
                 </nav>
             </div>
@@ -4338,7 +4361,8 @@
     let relayBusy = false;
     let relayCatalogBusy = false;
     let relayPage = 0;
-    const relayPageSize = 30;
+    let relayPageSize = 30;
+    let relayCountry = '';
     const relayCatalogStatus = document.getElementById('relayCatalogStatus');
 
     async function localDashboard(path, data) {
@@ -4405,23 +4429,85 @@
         return button;
     }
 
+    function relayFlag(countryCode) {
+        const code = countryCode === 'uk' ? 'gb' : countryCode;
+        if (!/^[a-z]{2}$/.test(code)) return null;
+        const img = document.createElement('img');
+        img.className = 'relay-flag';
+        img.src = '/flags/' + code + '.png';
+        img.alt = '';
+        img.addEventListener('error', () => { img.hidden = true; }, { once: true });
+        return img;
+    }
+
+    function resetRelayPage() {
+        relayPage = 0;
+        renderRelayManagement();
+    }
+
+    function relayCityKey(relay) {
+        return relay.city ? JSON.stringify([relay.country, relay.city]) : relay.name;
+    }
+
+    function updateRelayFilters() {
+        const countries = new Map();
+        const cities = new Map();
+        for (const relay of relayCatalog) {
+            if (relay.country) countries.set(relay.country, relay.name.split('-')[0]);
+            if (relay.city && (!relayCountry || relay.country === relayCountry)) {
+                cities.set(relayCityKey(relay), relay.city + (relayCountry ? '' : ' · ' + relay.country));
+            }
+        }
+        const picker = document.getElementById('relayCountryPicker');
+        const label = document.getElementById('relayCountryLabel');
+        const options = document.getElementById('relayCountryOptions');
+        if (relayCountry && !countries.has(relayCountry)) relayCountry = '';
+        label.replaceChildren(relayCountry || 'همهٔ کشورها');
+        const selectedFlag = relayFlag(countries.get(relayCountry) || '');
+        if (selectedFlag) label.prepend(selectedFlag);
+        options.replaceChildren();
+        for (const [country, code] of [['', ''], ...[...countries.entries()].sort(([a], [b]) => a.localeCompare(b))]) {
+            const button = relayButton(country || 'همهٔ کشورها', '', () => {
+                relayCountry = country;
+                picker.open = false;
+                label.focus();
+                updateRelayFilters();
+                resetRelayPage();
+            });
+            button.setAttribute('aria-pressed', String(country === relayCountry));
+            const flag = relayFlag(code);
+            if (flag) button.prepend(flag);
+            options.append(button);
+        }
+        const field = document.getElementById('relayCityFilter');
+        const selected = field.value;
+        field.replaceChildren(new Option('همهٔ شهرها', ''));
+        for (const [key, name] of [...cities.entries()].sort((a, b) => a[1].localeCompare(b[1]))) {
+            field.add(new Option(name, key));
+        }
+        field.value = cities.has(selected) ? selected : '';
+    }
+
     function renderRelayManagement() {
         const query = document.getElementById('relayCatalogSearch').value.trim().toLowerCase();
         const filter = document.getElementById('relayInstallFilter').value;
+        const selectedCity = document.getElementById('relayCityFilter').value;
         const cities = new Map();
         const byName = new Map(relayCatalog.map(relay => [relay.name, relay]));
         for (const name of installedRelays?.keys() || []) {
             if (!byName.has(name)) byName.set(name, { name });
         }
         for (const relay of byName.values()) {
-            const key = relay.city ? JSON.stringify([relay.country, relay.city]) : relay.name;
-            if (!cities.has(key)) cities.set(key, { city: relay.city || relay.name, country: relay.country || '', relays: [] });
+            const key = relayCityKey(relay);
+            if (!cities.has(key)) cities.set(key, { key, city: relay.city || relay.name, country: relay.country || '', relays: [] });
             cities.get(key).relays.push(relay);
         }
         const matches = [...cities.values()].map(city => ({
             ...city,
             installed: city.relays.map(relay => installedRelays?.get(relay.name)).filter(Boolean)
         })).filter(city => {
+            if (relayCountry && city.country !== relayCountry) return false;
+            if (selectedCity && city.key !== selectedCity) return false;
             if (filter === 'installed' && !city.installed.length) return false;
             if (filter === 'available' && (!installedRelays || city.installed.length)) return false;
             return [city.city, city.country, ...city.relays.flatMap(relay => [relay.name, relay.ip])]
@@ -4434,23 +4520,31 @@
             ? `صفحهٔ ${relayPage + 1} از ${pages} · ${matches.length} شهر` : 'شهری برای نمایش نیست';
         document.getElementById('relayPagePrev').disabled = relayPage === 0;
         document.getElementById('relayPageNext').disabled = relayPage >= pages - 1;
+        const numbers = document.getElementById('relayPageNumbers');
+        numbers.replaceChildren();
+        const firstPage = Math.max(0, Math.min(relayPage - 2, pages - 5));
+        for (let page = firstPage; pages > 1 && page < Math.min(pages, firstPage + 5); page += 1) {
+            const button = relayButton(String(page + 1), '', () => {
+                relayPage = page;
+                renderRelayManagement();
+                numbers.querySelector('[aria-current="page"]')?.focus();
+            });
+            button.setAttribute('aria-label', `صفحهٔ ${page + 1}`);
+            if (page === relayPage) button.setAttribute('aria-current', 'page');
+            numbers.append(button);
+        }
         const rows = document.createDocumentFragment();
         const start = relayPage * relayPageSize;
         for (const city of matches.slice(start, start + relayPageSize)) {
             const card = document.createElement('section');
             card.className = 'relay-city';
-            const countryCode = city.country ? city.relays[0].name.split('-')[0].replace(/^uk$/, 'gb') : '';
-            const flag = /^[a-z]{2}$/.test(countryCode)
-                ? String.fromCodePoint(...Array.from(countryCode, letter => letter.charCodeAt(0) + 127365)) : '';
             const header = document.createElement('header');
             header.className = 'relay-city-header';
             const heading = document.createElement('h3');
             heading.textContent = [city.city, city.country].filter(Boolean).join(' · ');
-            const flagIcon = document.createElement('span');
-            flagIcon.className = 'relay-flag';
-            flagIcon.setAttribute('aria-hidden', 'true');
-            flagIcon.textContent = flag;
-            header.append(flagIcon, heading);
+            const flag = city.country && relayFlag(city.relays[0].name.split('-')[0]);
+            if (flag) header.append(flag);
+            header.append(heading);
             card.append(header);
             for (const iface of city.installed) card.append(buildCityPeer(city.relays, iface));
             const available = city.relays.filter(relay => relay.ip && !installedRelays?.has(relay.name)
@@ -4705,6 +4799,7 @@
         relayCatalogStatus.textContent = 'در حال خواندن فهرست…';
         try {
             relayCatalog = await load();
+            updateRelayFilters();
             relayCatalogStatus.textContent = relayCatalog.length
                 ? `${relayCatalog.length} رله در فهرست` : emptyMessage;
             renderRelayManagement();
@@ -4776,6 +4871,16 @@
     document.getElementById('relaySettings').addEventListener('submit', event => {
         event.preventDefault();
         void runRelayAction(saveAndApplyRelaySettings);
+    });
+    document.getElementById('relayPageSize').addEventListener('change', event => {
+        relayPageSize = Number(event.currentTarget.value);
+        resetRelayPage();
+    });
+    document.getElementById('relayCityFilter').addEventListener('change', resetRelayPage);
+    document.getElementById('relayCountryPicker').addEventListener('keydown', event => {
+        if (event.key !== 'Escape') return;
+        event.currentTarget.open = false;
+        document.getElementById('relayCountryLabel').focus();
     });
     document.getElementById('relayInstallFilter').addEventListener('change', () => {
         relayPage = 0;

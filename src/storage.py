@@ -107,6 +107,29 @@ def dispatch(path, method, payload):
     with LOCK:
         db = read_database()
         settings = db.get("wireguard", {})
+        if path == "/dashboard/client-names":
+            names = db.get("client_names", {})
+            if method == "GET":
+                return names
+            if method == "POST":
+                identity = payload.get("identity", "")
+                name = payload.get("name", "")
+                if not isinstance(identity, str) or not isinstance(name, str):
+                    raise ValueError("نام یا شناسهٔ دستگاه نامعتبر است.")
+                if not re.fullmatch(r"mac:[0-9a-f]{12}", identity):
+                    if not identity.startswith("ip:"):
+                        raise ValueError("شناسهٔ دستگاه نامعتبر است.")
+                    identity = "ip:" + str(ipaddress.IPv4Address(identity[3:]))
+                name = name.strip()
+                if len(name) > 80 or any(ord(char) < 32 for char in name):
+                    raise ValueError("نام دستگاه باید حداکثر ۸۰ نویسه و در یک خط باشد.")
+                if name:
+                    names[identity] = name
+                else:
+                    names.pop(identity, None)
+                db["client_names"] = names
+                write_database(db)
+                return {"identity": identity, "name": name}
         if path == "/dashboard/relays" and method == "GET":
             return current_catalog(db)
         if path == "/dashboard/wireguard":

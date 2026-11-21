@@ -601,6 +601,8 @@
         .client-card.is-offline { border-inline-start: 3px solid #a84f55; }
         .client-card-header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
         .client-card-header > div { flex: 1 1 105px; display: grid; min-width: 0; overflow-wrap: anywhere; }
+        .client-card .client-name { width: auto; min-width: 0; padding: 0; background: transparent; border: 0; color: var(--text); text-align: start; font: inherit; font-weight: 700; overflow-wrap: anywhere; }
+        .client-card .client-name:hover { text-decoration: underline dotted; }
         .client-card-header .badge { white-space: normal; overflow-wrap: anywhere; }
         .client-device-icon { width: 35px; height: 35px; display: grid; place-items: center; background: #263650; color: #91c9ff; border-radius: 9px; }
         .client-device-icon svg { width: 20px; height: 20px; }
@@ -1061,6 +1063,7 @@
     let failStreak = 0;
 
     const clientView = new Map();
+    let clientNames = new Map();
 
     function esc(value) {
         return String(value ?? '').replace(/[&<>"']/g, (ch) => ({
@@ -2417,6 +2420,37 @@
         return Boolean(box && box.checked);
     }
 
+    function clientIdentity(client) {
+        const mac = String(client.mac || '').replace(/[:-]/g, '').toLowerCase();
+        return /^[0-9a-f]{12}$/.test(mac) && mac !== '000000000000' ? 'mac:' + mac : 'ip:' + client.ip;
+    }
+
+    function clientDisplayName(client) {
+        return clientNames.get(clientIdentity(client)) || client.host;
+    }
+
+    async function editClientName(card) {
+        const client = clientView.get(card.dataset.ip);
+        if (!client) return;
+        const identity = clientIdentity(client);
+        const current = clientNames.get(identity) || '';
+        const name = window.prompt('نام دلخواه دستگاه؛ برای بازگشت به نام اصلی، خالی بگذارید.', current || client.host);
+        if (name === null) return;
+        const next = name.trim();
+        if (next === current || (!current && next === client.host)) return;
+        const feedback = card.querySelector('.client-change-status');
+        setText(feedback, 'در حال ذخیرهٔ نام…');
+        try {
+            const saved = await localDashboard('client-names', { identity, name: next });
+            if (saved.name) clientNames.set(saved.identity, saved.name);
+            else clientNames.delete(saved.identity);
+            renderClientCards();
+            setText(feedback, 'نام دستگاه ذخیره شد');
+        } catch (error) {
+            setText(feedback, error.message);
+        }
+    }
+
     function visibleClientRows() {
         const query = document.getElementById('clientSearch').value;
         const route = document.getElementById('clientRouteFilter').value;
@@ -2426,7 +2460,7 @@
             if (!showWiredEnabled() && row.source === 'arp' && !lists.length) return false;
             if (route && (lists.length ? 'vpn' : 'direct') !== route) return false;
             if (state && (row.offline && !row.here && !row.isTest ? 'offline' : 'online') !== state) return false;
-            return matchesFilter([row.host, row.ip, row.mac, row.kind, ...lists].join(' '), query);
+            return matchesFilter([clientDisplayName(row), row.host, row.ip, row.mac, row.kind, ...lists].join(' '), query);
         });
     }
 
@@ -2589,7 +2623,7 @@
         row.innerHTML = `
             <header class="client-card-header">
                 <span class="client-device-icon" data-field="device"></span>
-                <div><strong data-field="host"></strong><span class="muted" data-field="static"></span></div>
+                <div><button type="button" class="client-name" data-field="host" title="برای تغییر نام دو بار کلیک کنید"></button><span class="muted" data-field="static"></span></div>
                 <span data-field="badge"></span>
             </header>
             <div class="client-addresses" dir="ltr"><strong data-field="ip"></strong><span data-field="mac"></span></div>
@@ -2658,7 +2692,10 @@
         if (testButton) testButton.hidden = !model.isTest;
         if (flushButton) flushButton.hidden = Boolean(model.isTest);
         paintClientDevice(row.querySelector('[data-field="device"]'), model.host, model.isTest);
-        setText(row.querySelector('[data-field="host"]'), model.host);
+        const nameButton = row.querySelector('[data-field="host"]');
+        const name = clientDisplayName(model);
+        setText(nameButton, name);
+        nameButton.setAttribute('aria-label', 'تغییر نام ' + name);
         setText(row.querySelector('[data-field="mac"]'), model.mac);
         setText(row.querySelector('[data-field="static"]'), model.kind);
         setText(row.querySelector('[data-field="ip"]'), model.ip);
@@ -3957,12 +3994,21 @@
     for (const id of ['clientRouteFilter', 'clientStateFilter']) {
         document.getElementById(id).addEventListener('change', renderClientCards);
     }
+    document.getElementById('clientCards').addEventListener('dblclick', event => {
+        const name = event.target.closest('.client-name');
+        if (name) void editClientName(name.closest('.client-card'));
+    });
     document.getElementById('clientCards').addEventListener('change', event => {
         if (!event.target.matches('[data-field="peer-value"]')) return;
         const card = event.target.closest('.client-card');
         if (card) void applyClient(card.dataset.ip);
     });
     document.getElementById('clientCards').addEventListener('click', (event) => {
+        const name = event.target.closest('.client-name');
+        if (name && event.detail === 0) {
+            void editClientName(name.closest('.client-card'));
+            return;
+        }
         if (busy) return;
         const option = event.target.closest('.peer-option');
         if (option) {
@@ -5089,6 +5135,14 @@
     document.getElementById('relayPageNext').addEventListener('click', () => {
         relayPage += 1;
         renderRelayManagement();
+    });
+    void localDashboard('client-names').then(names => {
+        for (const [identity, name] of Object.entries(names)) {
+            if (!clientNames.has(identity)) clientNames.set(identity, name);
+        }
+        renderClientCards();
+    }).catch(error => {
+        if (monitoring) setPollStatus('خطا در بارگذاری نام دستگاه‌ها: ' + error.message);
     });
 </script>
 </body>

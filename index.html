@@ -588,6 +588,35 @@
         @media (max-width: 680px) {
             .relay-settings, .relay-toolbar { grid-template-columns: minmax(0, 1fr); }
         }
+
+        .client-filters { margin: 12px 0 16px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 10px; }
+        .client-filters summary { cursor: pointer; font-weight: 700; }
+        .client-filter-fields { display: grid; grid-template-columns: minmax(0, 2fr) 1fr 1fr auto; gap: 10px; align-items: end; margin-top: 10px; }
+        .client-filter-fields > label:not(.switch) { display: grid; gap: 4px; color: var(--muted); font-size: 12px; }
+        .client-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: 12px; }
+        .client-cards > .empty { grid-column: 1 / -1; }
+        .client-card { display: grid; align-content: start; gap: 10px; padding: 13px; min-width: 0; background: #142032; border: 1px solid var(--border); border-radius: 12px; }
+        .client-card.is-self { border-color: #317999; }
+        .client-card.is-test { border-color: #80652d; }
+        .client-card.is-offline { border-inline-start: 3px solid #a84f55; }
+        .client-card-header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+        .client-card-header > div { flex: 1 1 105px; display: grid; min-width: 0; overflow-wrap: anywhere; }
+        .client-card-header .badge { white-space: normal; overflow-wrap: anywhere; }
+        .client-device-icon { width: 35px; height: 35px; display: grid; place-items: center; background: #263650; color: #91c9ff; border-radius: 9px; }
+        .client-device-icon svg { width: 20px; height: 20px; }
+        .client-addresses { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px; color: var(--muted); font-size: 12px; }
+        .client-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+        .client-metrics > div { display: grid; gap: 3px; padding: 6px; border-radius: 7px; background: #0e1826; text-align: center; }
+        .client-metrics span { color: var(--muted); font-size: 11px; }
+        .client-metrics .client-session { grid-column: 1 / -1; }
+        .client-card .peer-picker, .client-card .peer-picker-btn { width: 100%; min-width: 0; }
+        .client-card .peer-option-name { display: flex; align-items: center; gap: 6px; }
+        .client-change-status { margin: 0; font-size: 12px; color: var(--muted); }
+        .client-change-status:empty { display: none; }
+        .client-card .relay-actions { border-color: var(--border); }
+        .client-card .relay-icon[hidden] { display: none; }
+        body.is-busy .client-card .relay-actions button, body.is-busy .client-card .peer-picker-btn { pointer-events: none; }
+        @media (max-width: 750px) { .client-filter-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
     </style>
 </head>
 <body>
@@ -652,34 +681,36 @@
     </div>
 
     <div id="tabClients" class="tab-panel" role="tabpanel">
-        <div class="card">
+        <section class="card">
             <div class="header-flex">
-                <h2>دستگاه‌های شبکه و ترافیک لحظه‌ای</h2>
-                <div class="filter-box">
+                <h2>دستگاه‌های شبکه</h2>
+                <span id="clientResultsCount" class="muted" role="status"></span>
+            </div>
+            <details class="client-filters" open>
+                <summary>جست‌وجوی پیشرفته</summary>
+                <div class="client-filter-fields">
+                    <label>جست‌وجو
+                        <input id="clientSearch" type="search" placeholder="نام، IP، MAC یا نام peer">
+                    </label>
+                    <label>مسیر اینترنت
+                        <select id="clientRouteFilter">
+                            <option value="">همه</option><option value="vpn">Mullvad</option><option value="direct">اینترنت عادی</option>
+                        </select>
+                    </label>
+                    <label>وضعیت دستگاه
+                        <select id="clientStateFilter">
+                            <option value="">همه</option><option value="online">آنلاین</option><option value="offline">آفلاین</option>
+                        </select>
+                    </label>
                     <label class="switch" for="showWired">
                         <input type="checkbox" id="showWired">
                         <span class="switch-ui" aria-hidden="true"></span>
                         <span>نمایش دستگاه‌های سیمی</span>
                     </label>
                 </div>
-            </div>
-            <div class="table-wrap">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>نام دستگاه</th>
-                            <th>آی‌پی</th>
-                            <th>وضعیت</th>
-                            <th>سرعت زنده (دانلود / آپلود)</th>
-                            <th>ترافیک نشست فعال</th>
-                            <th>انتخاب Peer مولواد</th>
-                            <th>عملیات</th>
-                        </tr>
-                    </thead>
-                    <tbody id="clientsTable"></tbody>
-                </table>
-            </div>
-        </div>
+            </details>
+            <div id="clientCards" class="client-cards" data-empty="ابتدا به روتر متصل شوید."></div>
+        </section>
     </div>
 
     <div id="tabWireguard" class="tab-panel" role="tabpanel" hidden>
@@ -1370,7 +1401,7 @@
         latestClientRows = [];
         clientKeyOrder = [];
         resetSpeedWindow();
-        emptyTable();
+        emptyClientCards();
         installedRelays = null;
         document.getElementById('wgTabCount').textContent = '0';
         renderRelayManagement();
@@ -2207,6 +2238,9 @@
             const handshake = document.createElement('span');
             handshake.className = 'peer-option-hs';
             handshake.textContent = peerMeta(wg);
+            const country = /^mv-wg-([a-z]{2})-/.exec(wg.name);
+            const flag = country && relayFlag(country[1]);
+            if (flag) name.prepend(flag);
             option.appendChild(name);
             option.appendChild(handshake);
             fragment.appendChild(option);
@@ -2339,11 +2373,13 @@
     function choosePeer(picker, value) {
         const hidden = picker.querySelector('[data-field="peer-value"]');
         hidden.value = value || '';
-        if (picker.id !== 'pathTestPicker') {
-            picker.dataset.draft = hidden.value === picker.dataset.assigned ? '' : '1';
-        }
+        const changed = hidden.value !== picker.dataset.assigned;
+        if (picker.id !== 'pathTestPicker') picker.dataset.draft = changed ? '1' : '';
         closeAllPickers();
         paintPickerButton(picker, hidden.value);
+        if (picker.id !== 'pathTestPicker' && changed) {
+            hidden.dispatchEvent(new Event('change', { bubbles: true }));
+        }
     }
 
     function showWiredEnabled() {
@@ -2352,13 +2388,22 @@
     }
 
     function visibleClientRows() {
-        if (showWiredEnabled()) return latestClientRows;
-        return latestClientRows.filter((row) => row.source !== 'arp' || listsForIp(row.ip).length > 0);
+        const query = document.getElementById('clientSearch').value;
+        const route = document.getElementById('clientRouteFilter').value;
+        const state = document.getElementById('clientStateFilter').value;
+        return latestClientRows.filter(row => {
+            const lists = listsForIp(row.ip);
+            if (!showWiredEnabled() && row.source === 'arp' && !lists.length) return false;
+            if (route && (lists.length ? 'vpn' : 'direct') !== route) return false;
+            if (state && (row.offline && !row.here && !row.isTest ? 'offline' : 'online') !== state) return false;
+            return matchesFilter([row.host, row.ip, row.mac, row.kind, ...lists].join(' '), query);
+        });
     }
 
-    function renderClientTable() {
+    function renderClientCards() {
         const rows = visibleClientRows();
         visibleClientCount = rows.length;
+        setText(document.getElementById('clientResultsCount'), monitoring ? `${rows.length} دستگاه` : '');
         const sortedIps = rows.map((row) => row.ip);
         clientKeyOrder = stableKeys(clientKeyOrder, sortedIps);
         clientView.clear();
@@ -2385,12 +2430,12 @@
                 count: speed.count
             });
         });
-        const tbody = document.getElementById('clientsTable');
-        tbody.dataset.empty = showWiredEnabled()
-            ? 'دستگاهی در DHCP یا ARP شبکه محلی پیدا نشد.'
-            : 'دستگاه DHCP یا تستی پیدا نشد. دستگاه‌های سیمی مخفی هستند.';
+        const cards = document.getElementById('clientCards');
+        cards.dataset.empty = monitoring ? 'دستگاهی با این فیلترها پیدا نشد.' : 'ابتدا به روتر متصل شوید.';
+        const empty = cards.querySelector('[data-placeholder]');
+        if (empty) setText(empty, cards.dataset.empty);
         syncKeyed(
-            tbody,
+            cards,
             clientKeyOrder,
             () => buildClientRow(),
             (row, key) => renderClientRow(row, clientView.get(key))
@@ -2509,46 +2554,64 @@
     }
 
     function buildClientRow() {
-        const row = document.createElement('tr');
+        const row = document.createElement('article');
+        row.className = 'client-card';
         row.innerHTML = `
-            <td>
-                <strong data-field="host"></strong>
-                <span class="muted" data-field="static"></span><br>
-                <span class="muted" data-field="mac"></span>
-            </td>
-            <td dir="ltr" class="ip" data-field="ip"></td>
-            <td data-field="badge"></td>
-            <td dir="ltr" class="speed-cell">
-                <span class="speed-down" data-field="dl"></span>
-                <span class="sep">/</span>
-                <span class="speed-up" data-field="ul"></span>
-            </td>
-            <td dir="ltr" class="session-cell">
-                <span data-field="sess"></span>
-                <span class="muted" data-field="conns"></span>
-            </td>
-            <td>
-                <div class="peer-picker">
-                    <button type="button" class="peer-picker-btn" aria-expanded="false" aria-haspopup="listbox">
-                        <span class="peer-picker-name">اینترنت عادی</span>
-                        <span class="peer-picker-meta">بدون مولواد</span>
-                    </button>
-                    <div class="peer-picker-menu" hidden>
-                        <input type="text" class="peer-picker-search" dir="auto" placeholder="جستجوی کشور، شهر یا نام" autocomplete="off">
-                        <div class="peer-picker-list" role="listbox"></div>
-                    </div>
-                    <input type="hidden" data-field="peer-value" value="">
+            <header class="client-card-header">
+                <span class="client-device-icon" data-field="device"></span>
+                <div><strong data-field="host"></strong><span class="muted" data-field="static"></span></div>
+                <span data-field="badge"></span>
+            </header>
+            <div class="client-addresses" dir="ltr"><strong data-field="ip"></strong><span data-field="mac"></span></div>
+            <div class="client-metrics">
+                <div><span>دانلود</span><strong dir="ltr" class="speed-down" data-field="dl"></strong></div>
+                <div><span>آپلود</span><strong dir="ltr" class="speed-up" data-field="ul"></strong></div>
+                <div class="client-session"><span data-field="conns"></span><strong dir="ltr" data-field="sess"></strong></div>
+            </div>
+            <div class="peer-picker">
+                <button type="button" class="peer-picker-btn" aria-expanded="false" aria-haspopup="listbox">
+                    <span class="peer-picker-name">اینترنت عادی</span>
+                    <span class="peer-picker-meta">بدون مولواد</span>
+                </button>
+                <div class="peer-picker-menu" hidden>
+                    <input type="search" class="peer-picker-search" aria-label="جست‌وجوی peer" placeholder="کشور، شهر یا نام peer">
+                    <div class="peer-picker-list" role="listbox"></div>
                 </div>
-            </td>
-            <td class="actions">
-                <button type="button" class="success compact" data-action="apply">اعمال</button>
-                <button type="button" class="info compact" data-action="ping-client">📡 پینگ</button>
-                <button type="button" class="compact" data-action="test-device" hidden>تست</button>
-                <button type="button" class="warning compact" data-action="flush">🔄 ریست</button>
-                <button type="button" class="danger compact" data-action="disconnect">قطع</button>
-            </td>
+                <input type="hidden" data-field="peer-value" value="">
+            </div>
+            <p class="client-change-status" role="status"></p>
+            <footer class="relay-actions"></footer>
         `;
+        const footer = row.querySelector('footer');
+        for (const [action, title, icon, style] of [
+            ['ping-client', 'پینگ دستگاه', 'ping', 'info'],
+            ['test-device', 'تست دستگاه', 'trace', 'info'],
+            ['flush', 'ریست اتصال‌ها', 'restart', 'warning'],
+            ['disconnect', 'قطع Mullvad', 'power', 'danger']
+        ]) {
+            const button = relayIcon(title, icon, style, null);
+            button.dataset.action = action;
+            footer.append(button);
+        }
         return row;
+    }
+
+    function paintClientDevice(el, host, isTest) {
+        const patterns = [
+            [/iphone|android|galaxy|samsung|pixel|xiaomi|redmi|huawei|s\d{2}[- ]?ultra/i, 'گوشی', 'M7 2h10v20H7z M11 18h2'],
+            [/ipad|tablet/i, 'تبلت', 'M4 3h16v18H4z M10 17h4'],
+            [/xbox|playstation|ps[45]|nintendo/i, 'کنسول بازی', 'M7 8h10l4 5-2 5-4-3H9l-4 3-2-5z M8 10v4 M6 12h4 M15 12h.01 M18 12h.01'],
+            [/macbook|laptop|desktop|windows|thinkpad|imac/i, 'رایانه', 'M3 4h18v13H3z M12 17v4 M8 21h8'],
+            [/smart.?tv|bravia|chromecast/i, 'تلویزیون', 'M3 6h18v13H3z M8 3l4 3 4-3']
+        ];
+        const match = !isTest && patterns.find(([pattern]) => pattern.test(host));
+        const label = isTest ? 'دستگاه تست' : match ? `${match[1]}، بر اساس نام دستگاه` : 'دستگاه شبکه';
+        if (el.title === label) return;
+        el.title = label;
+        el.setAttribute('aria-label', label);
+        el.setAttribute('role', 'img');
+        const path = match ? match[2] : 'M3 8h18v8H3z M7 12h.01 M11 12h.01 M15 12h2';
+        el.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${path}"/></svg>`;
     }
 
     function renderClientRow(row, model) {
@@ -2564,6 +2627,7 @@
         const flushButton = row.querySelector('[data-action="flush"]');
         if (testButton) testButton.hidden = !model.isTest;
         if (flushButton) flushButton.hidden = Boolean(model.isTest);
+        paintClientDevice(row.querySelector('[data-field="device"]'), model.host, model.isTest);
         setText(row.querySelector('[data-field="host"]'), model.host);
         setText(row.querySelector('[data-field="mac"]'), model.mac);
         setText(row.querySelector('[data-field="static"]'), model.kind);
@@ -2635,11 +2699,8 @@
         }
     }
 
-    function emptyTable() {
-        const tbody = document.getElementById('clientsTable');
-        if (!monitoring) {
-            tbody.innerHTML = '<tr data-placeholder="1"><td colspan="7" class="empty">ابتدا به روتر متصل شوید.</td></tr>';
-        }
+    function emptyClientCards() {
+        if (!monitoring) renderClientCards();
     }
 
     function accumulateClients(connections) {
@@ -2981,7 +3042,7 @@
             });
             clientRows.sort((a, b) => Number(Boolean(b.isTest)) - Number(Boolean(a.isTest)) || Number(b.here) - Number(a.here) || a.host.localeCompare(b.host, 'fa'));
             latestClientRows = clientRows;
-            renderClientTable();
+            renderClientCards();
             updateSummaryStatus();
         } finally {
             setSectionLoading('#tabClients .card', false);
@@ -3126,7 +3187,7 @@
     }
 
     function rowOf(ip) {
-        return document.querySelector(`#clientsTable tr[data-key="${CSS.escape(ip)}"]`);
+        return document.querySelector(`#clientCards [data-key="${CSS.escape(ip)}"]`);
     }
 
     async function testAssignedDevice(ip) {
@@ -3157,14 +3218,21 @@
     }
 
     async function applyClient(ip) {
-        if (busy) return;
         const row = rowOf(ip);
         if (!row) return;
+        const picker = row.querySelector('.peer-picker');
+        if (busy || !monitoring) {
+            syncSelectValue(ip, picker.dataset.assigned);
+            return;
+        }
+        const previous = picker.dataset.assigned;
+        const feedback = row.querySelector('.client-change-status');
         const target = selectedPeer(row);
         const host = row.dataset.host || ip;
         const leaseId = row.dataset.leaseId;
         const isDynamic = row.dataset.dynamic === 'true';
         setBusy(true);
+        setText(feedback, 'در حال تغییر مسیر…');
         try {
             setStatus(target ? `در حال اتصال ${ip} به ${target}...` : `در حال بازگرداندن ${ip} به اینترنت عادی...`);
             const result = await assignClient(ip, target, host, leaseId, isDynamic);
@@ -3172,11 +3240,15 @@
             resetSpeedWindow();
             await refreshAll();
             syncSelectValue(ip, target);
+            setText(feedback, 'مسیر تغییر کرد');
             const where = target || 'اینترنت عادی';
             setHeal(result.notes.concat(result.warnings).join(' · '), result.warnings.length > 0);
             setStatus(`${ip} روی ${where} قرار گرفت و ${result.removed} کانکشن فعال بسته شد.`);
         } catch (err) {
-            setStatus('خطا هنگام اعمال: ' + err.message, true);
+            syncSelectValue(ip, previous);
+            setText(feedback, err.message);
+            await refreshAll().catch(() => {});
+            setStatus('خطا هنگام تغییر مسیر: ' + err.message, true);
         } finally {
             setBusy(false);
         }
@@ -3844,9 +3916,19 @@
 
     document.getElementById('showWired').addEventListener('change', (event) => {
         try { localStorage.setItem(LS_WIRED, event.target.checked ? '1' : '0'); } catch (err) { /* private mode */ }
-        if (latestClientRows.length || monitoring) renderClientTable();
+        if (latestClientRows.length || monitoring) renderClientCards();
     });
-    document.getElementById('clientsTable').addEventListener('click', (event) => {
+    document.getElementById('clientSearch').addEventListener('input', renderClientCards);
+    for (const id of ['clientRouteFilter', 'clientStateFilter']) {
+        document.getElementById(id).addEventListener('change', renderClientCards);
+    }
+    document.getElementById('clientCards').addEventListener('change', event => {
+        if (!event.target.matches('[data-field="peer-value"]')) return;
+        const card = event.target.closest('.client-card');
+        if (card) void applyClient(card.dataset.ip);
+    });
+    document.getElementById('clientCards').addEventListener('click', (event) => {
+        if (busy) return;
         const option = event.target.closest('.peer-option');
         if (option) {
             choosePeer(option.closest('.peer-picker'), option.dataset.peer || '');
@@ -3859,20 +3941,19 @@
         }
         const button = event.target.closest('button[data-action]');
         if (!button || busy) return;
-        const row = button.closest('tr');
+        const row = button.closest('.client-card');
         const ip = row && row.dataset.ip;
         if (!ip) return;
-        if (button.dataset.action === 'apply') applyClient(ip);
-        else if (button.dataset.action === 'ping-client') openClientPingModal(ip, row.dataset.host || ip);
+        if (button.dataset.action === 'ping-client') openClientPingModal(ip, row.dataset.host || ip);
         else if (button.dataset.action === 'flush') flushOnly(ip);
         else if (button.dataset.action === 'disconnect') disconnectClient(ip);
         else if (button.dataset.action === 'test-device') testAssignedDevice(ip);
     });
-    document.getElementById('clientsTable').addEventListener('input', (event) => {
+    document.getElementById('clientCards').addEventListener('input', (event) => {
         if (!event.target.classList.contains('peer-picker-search')) return;
         filterPickerList(event.target.closest('.peer-picker'));
     });
-    document.getElementById('clientsTable').addEventListener('keydown', (event) => {
+    document.getElementById('clientCards').addEventListener('keydown', (event) => {
         if (!event.target.classList.contains('peer-picker-search')) return;
         if (event.key === 'Escape') {
             closeAllPickers();
@@ -4357,7 +4438,7 @@
 
     const resumeSession = loadSavedLogin();
     loadWiredPref();
-    emptyTable();
+    emptyClientCards();
     if (resumeSession) connectAndStart();
     const relayManagement = document.getElementById('relayManagement');
     const relayStatus = document.getElementById('relayManagementStatus');

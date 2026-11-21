@@ -574,6 +574,11 @@
         .relay-peer { display: flex; flex-direction: column; gap: 8px; padding: 8px 0; }
         .relay-city > .relay-peer { flex: 1; }
         .relay-peer > footer { margin-top: auto; }
+        .relay-city:has(> .relay-peer[data-health="problem"]) { border-color: #b34b54; background: #321d25; }
+        .relay-city:has(> .relay-peer[data-health="problem"]) .relay-city-header { background: #41232c; }
+        .relay-peer[data-health="problem"] .relay-state { background: #552633; color: #ffc6c9; }
+        .relay-peer[data-health="checking"] .relay-state { background: #463b27; color: #ffe0a1; }
+        .relay-peer[data-health="problem"] [data-relay-result] { color: #ffc6c9; }
         .relay-peer + .relay-peer { border-top: 1px solid var(--border); }
         .relay-meta { color: var(--muted); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
         .relay-meta:empty { display: none; }
@@ -1045,6 +1050,7 @@
     let dhcpLeases = [];
     let visibleClientCount = 0;
     const peerTests = new Map();
+    const LIVE_TEST_DISPLAY_MS = 60_000;
     let prevIfaceStats = new Map();
     let prevClientBytes = new Map();
     let prevTimestamp = 0;
@@ -2482,12 +2488,12 @@
             }
             const summary = summarizePing(result);
             if (summary.received > 0) {
-                peerTests.set(name, { state: 'ok', avg: summary.avg, text: `مسیر به ${target} باز است · ${summary.received} از ${summary.sent} جواب` + (summary.avg ? ' · ' + summary.avg : '') });
+                peerTests.set(name, { state: 'ok', checkedAt: Date.now(), avg: summary.avg, text: `مسیر به ${target} باز است · ${summary.received} از ${summary.sent} جواب` + (summary.avg ? ' · ' + summary.avg : '') });
             } else {
-                peerTests.set(name, { state: 'fail', text: `بسته‌ها به ${target} جواب نگرفتند. از این Peer اینترنت رد نمی‌شود` });
+                peerTests.set(name, { state: 'fail', checkedAt: Date.now(), text: `پینگ ${target} از این تونل پاسخی نگرفت` });
             }
         } catch (err) {
-            peerTests.set(name, { state: 'fail', text: err.message });
+            peerTests.set(name, { state: 'fail', checkedAt: Date.now(), text: err.message });
         }
         paintPeerTest(name);
     }
@@ -4403,6 +4409,15 @@
                     || old.peer?.['endpoint-address'] !== item.peer?.['endpoint-address']
                     || old.peer?.['public-key'] !== item.peer?.['public-key'];
             });
+        if (changed && installedRelays) {
+            for (const [key, old] of installedRelays) {
+                const item = next.get(key);
+                if ((!item || old['.id'] !== item['.id'] || old.peer?.['endpoint-address'] !== item.peer?.['endpoint-address'])
+                    && peerTests.get(old.name)?.state !== 'running') {
+                    peerTests.delete(old.name);
+                }
+            }
+        }
         installedRelays = next;
         return changed;
     }
@@ -4628,6 +4643,7 @@
         title.textContent = iface ? (current?.name || iface.name) : `${relays.length} رله`;
         const state = document.createElement('span');
         state.className = 'relay-state';
+        state.dataset.relayState = '';
         state.dataset.state = iface && !disabled ? 'on' : 'off';
         state.textContent = !installedRelays ? 'روتر متصل نیست' : !iface ? 'نصب نشده' : disabled ? 'خاموش' : 'روشن';
         const titleRow = document.createElement('div');
@@ -4655,9 +4671,8 @@
                 relayIcon(disabled ? 'فعال' : 'غیرفعال', 'power', 'info', () => mutateRelay(async () => {
                     await apiFetch('/interface/wireguard/' + assertId(iface['.id']), 'PATCH', { disabled: disabled ? 'no' : 'yes' });
                 }), relayBusy),
-                relayIcon('پینگ', 'ping', 'info', () => {
-                    void testPeerPath(iface.name).finally(updateRelayCardStats);
-                    updateRelayCardStats();
+                relayIcon('تست لحظه‌ای ارتباط', 'ping', 'info', () => {
+                    void testPeerPath(iface.name);
                 }, disabled || relayBusy),
                 relayIcon('MTR و عیب‌یابی', 'trace', 'info', () => openDiagnoseModal(iface.name), relayBusy),
                 relayIcon('راه‌اندازی مجدد', 'restart', 'info', () => mutateRelay(() => restartPeerInterface(iface.name)), relayBusy || Boolean(disabled))
@@ -4705,13 +4720,33 @@
         return card;
     }
 
+    function relayHealthStatus(model, test, now) {
+        if (model?.disabled) return { state: 'problem', text: 'آفلاین · خاموش' };
+        if (test?.state === 'running') return { state: 'checking', text: 'در حال تست…' };
+        if (test?.checkedAt && now - test.checkedAt <= LIVE_TEST_DISPLAY_MS) {
+            return test.state === 'ok' ? { state: 'ok', text: 'ارتباط برقرار' }
+                : { state: 'problem', text: 'مشکل ارتباط' };
+        }
+        if (!model) return null;
+        return model.health.ok ? { state: 'ok', text: 'آنلاین' }
+            : { state: 'problem', text: 'آفلاین' };
+    }
+
     function updateRelayCardStats() {
         if (document.getElementById('tabWireguard').hidden) return;
         const models = new Map(wgCatalog.map(model => [model.name, model]));
+        const now = Date.now();
         for (const card of relayManagement.querySelectorAll('[data-relay-interface]')) {
             const name = card.dataset.relayInterface;
             const model = models.get(name);
             const test = peerTests.get(name);
+            const state = relayHealthStatus(model, test, now);
+            const badge = card.querySelector('[data-relay-state]');
+            if (state) {
+                card.dataset.health = state.state;
+                badge.dataset.state = state.state === 'ok' ? 'on' : 'off';
+                setText(badge, state.text);
+            }
             const metrics = {
                 health: model?.health.ageText || model?.health.text || '—',
                 clients: model ? String(model.clients.length) : '—',
@@ -4724,7 +4759,11 @@
             for (const field of card.querySelectorAll('[data-metric]')) {
                 setText(field, metrics[field.dataset.metric]);
             }
-            setText(card.querySelector('[data-relay-result]'), test?.text || '');
+            const recent = test?.checkedAt && now - test.checkedAt <= LIVE_TEST_DISPLAY_MS;
+            const result = recent
+                ? `${new Date(test.checkedAt).toLocaleTimeString('fa-IR')} · ${test.text}`
+                : test?.state === 'running' ? test.text : '';
+            setText(card.querySelector('[data-relay-result]'), result);
         }
     }
 

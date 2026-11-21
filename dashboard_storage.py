@@ -11,6 +11,10 @@ import urllib.request
 
 from generator import URL
 
+class CatalogFetchError(Exception):
+    pass
+
+
 DB_PATH = Path(__file__).resolve().parent / "storage" / "database" / "exitflow.json"
 LOCK = threading.Lock()
 
@@ -46,34 +50,45 @@ def write_database(db):
 
 def load_catalog():
     request = urllib.request.Request(URL, headers={"User-Agent": "Exitflow"})
-    with urllib.request.urlopen(request, timeout=20) as response:
-        rows = json.load(response)
-    catalog = []
+    try:
+        with urllib.request.urlopen(request, timeout=8) as response:
+            return normalize_catalog(json.load(response))
+    except (OSError, ValueError) as error:
+        raise CatalogFetchError("دریافت فهرست از Mullvad ناموفق بود. از فایل JSON استفاده کنید یا دوباره تلاش کنید.") from error
+
+
+def normalize_catalog(rows):
+    if not isinstance(rows, list):
+        raise ValueError("فایل فهرست باید آرایهٔ رله‌های WireGuard باشد.")
+    catalog = {}
     for row in rows:
-        if not re.fullmatch(r"[a-z0-9-]+", row["hostname"]):
+        if not isinstance(row, dict):
+            continue
+        name = row.get("hostname")
+        if not isinstance(name, str) or not re.fullmatch(r"[a-z0-9-]+", name):
             continue
         try:
             ip = str(ipaddress.IPv4Address(row["ipv4_addr_in"]))
             if len(base64.b64decode(row["pubkey"], validate=True)) != 32:
                 continue
-        except (ValueError, TypeError):
+        except (KeyError, ValueError, TypeError):
             continue
-        catalog.append({
-            "name": row["hostname"],
-            "country": row["country_name"],
-            "city": row["city_name"],
+        catalog[name] = {
+            "name": name,
+            "country": str(row.get("country_name", "")),
+            "city": str(row.get("city_name", "")),
             "ip": ip,
             "publicKey": row["pubkey"],
             "active": row.get("active", True),
-        })
+        }
     if not catalog:
-        raise ValueError("Mullvad returned no IPv4 relays")
-    return sorted(catalog, key=lambda row: row["name"])
+        raise ValueError("هیچ رلهٔ IPv4 معتبری در فهرست پیدا نشد.")
+    return [catalog[name] for name in sorted(catalog)]
 
 
 def dispatch(path, method, payload):
     if path == "/dashboard/relays" and method == "POST":
-        catalog = load_catalog()
+        catalog = normalize_catalog(payload["relays"]) if "relays" in payload else load_catalog()
         with LOCK:
             db = read_database()
             db["relays"] = catalog

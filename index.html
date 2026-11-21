@@ -634,9 +634,18 @@
             <div class="header-flex">
                 <input id="relayCatalogSearch" type="search" placeholder="جستجوی کشور، شهر یا نام رله">
                 <button type="button" id="relayCatalogSync">دریافت فهرست Mullvad</button>
+                <label>فهرست آفلاین
+                    <input id="relayCatalogFile" type="file" accept=".json,application/json">
+                </label>
                 <button type="button" id="relayRouterSync">به‌روزرسانی وضعیت روتر</button>
             </div>
             <p id="relayManagementStatus" role="status"></p>
+            <p id="relayCatalogStatus" role="status"></p>
+            <div class="header-flex">
+                <button type="button" id="relayPagePrev">صفحهٔ قبل</button>
+                <span id="relayPageCount"></span>
+                <button type="button" id="relayPageNext">صفحهٔ بعد</button>
+            </div>
             <div id="relayCatalogRows" style="max-height: 28rem; overflow: auto;"></div>
         </details>
         <div class="card">
@@ -4472,6 +4481,10 @@
     let relayCatalog = [];
     let installedRelays = null;
     let relayBusy = false;
+    let relayCatalogBusy = false;
+    let relayPage = 0;
+    const relayPageSize = 30;
+    const relayCatalogStatus = document.getElementById('relayCatalogStatus');
 
     async function localDashboard(path, data) {
         const response = await fetch('/dashboard/' + path, data === undefined ? {} : {
@@ -4491,8 +4504,10 @@
     }
 
     async function loadInstalledRelays() {
-        installedRelays = null;
-        if (!monitoring) return;
+        if (!monitoring) {
+            installedRelays = null;
+            return;
+        }
         const rows = await apiList('/interface/wireguard?.proplist=.id,name,disabled');
         installedRelays = new Map(rows.filter(row => /^mv-wg-[a-z0-9-]+$/.test(row.name))
             .map(row => [row.name.slice(6), row]));
@@ -4504,10 +4519,19 @@
         for (const name of installedRelays?.keys() || []) {
             if (!catalog.has(name)) catalog.set(name, { name });
         }
+        const matches = Array.from(catalog.values(), relay => ({
+            relay, label: [relay.name, relay.country, relay.city, relay.ip].filter(Boolean).join(' · ')
+        })).filter(({ label }) => label.toLowerCase().includes(query));
+        const pageCount = Math.max(1, Math.ceil(matches.length / relayPageSize));
+        relayPage = Math.min(relayPage, pageCount - 1);
+        document.getElementById('relayPageCount').textContent = matches.length
+            ? `صفحهٔ ${relayPage + 1} از ${pageCount} · ${matches.length} رله`
+            : 'رله‌ای برای نمایش نیست';
+        document.getElementById('relayPagePrev').disabled = relayPage === 0;
+        document.getElementById('relayPageNext').disabled = relayPage >= pageCount - 1;
         const rows = document.createDocumentFragment();
-        for (const relay of catalog.values()) {
-            const label = [relay.name, relay.country, relay.city, relay.ip].filter(Boolean).join(' · ');
-            if (!label.toLowerCase().includes(query)) continue;
+        const start = relayPage * relayPageSize;
+        for (const { relay, label } of matches.slice(start, start + relayPageSize)) {
             const iface = installedRelays?.get(relay.name);
             const row = document.createElement('div');
             row.className = 'header-flex';
@@ -4544,7 +4568,7 @@
                             await removeCatalogRelay(iface);
                         }
                         await loadInstalledRelays();
-                        await refreshAll();
+                        void refreshAll().catch(error => setPollStatus(error.message));
                     }));
                     actions.append(button);
                 }
@@ -4645,14 +4669,34 @@
         await deleteById('/interface/wireguard', iface['.id']);
     }
 
+    async function refreshRelayCatalog(load, emptyMessage = '') {
+        if (relayCatalogBusy) return;
+        relayCatalogBusy = true;
+        const sync = document.getElementById('relayCatalogSync');
+        const file = document.getElementById('relayCatalogFile');
+        sync.disabled = file.disabled = true;
+        relayCatalogStatus.textContent = 'در حال خواندن فهرست…';
+        try {
+            relayCatalog = await load();
+            relayCatalogStatus.textContent = relayCatalog.length
+                ? `${relayCatalog.length} رله در فهرست` : emptyMessage;
+            renderRelayManagement();
+        } catch (error) {
+            relayCatalogStatus.textContent = error.message;
+        } finally {
+            relayCatalogBusy = false;
+            sync.disabled = file.disabled = false;
+        }
+    }
+
     relayManagement.addEventListener('toggle', () => {
         if (!relayManagement.open) return;
-        void runRelayAction(async () => {
-            const [settings, catalog] = await Promise.all([localDashboard('wireguard'), localDashboard('relays')]);
-            showRelaySettings(settings);
-            relayCatalog = catalog.length ? catalog : await localDashboard('relays', {});
-            await loadInstalledRelays();
-        });
+        renderRelayManagement();
+        void refreshRelayCatalog(() => localDashboard('relays'),
+            'برای شروع، فهرست Mullvad را دریافت کنید یا فایل JSON را انتخاب کنید.');
+        void localDashboard('wireguard').then(showRelaySettings)
+            .catch(error => { relayStatus.textContent = error.message; });
+        if (monitoring) void runRelayAction(loadInstalledRelays);
     });
     document.getElementById('relaySettings').addEventListener('submit', event => {
         event.preventDefault();
@@ -4661,11 +4705,31 @@
         })));
     });
     document.getElementById('relayCatalogSync').addEventListener('click', () => {
-        void runRelayAction(async () => { relayCatalog = await localDashboard('relays', {}); });
+        void refreshRelayCatalog(() => localDashboard('relays', {}));
+    });
+    document.getElementById('relayCatalogFile').addEventListener('change', event => {
+        const input = event.currentTarget;
+        const file = input.files[0];
+        input.value = '';
+        if (!file) return;
+        void refreshRelayCatalog(async () => {
+            if (file.size > 2 * 1024 * 1024) throw new Error('فایل JSON بیشتر از ۲ مگابایت است.');
+            return localDashboard('relays', { relays: JSON.parse(await file.text()) });
+        });
     });
     document.getElementById('relayRouterSync').addEventListener('click', () => void runRelayAction(loadInstalledRelays));
-    document.getElementById('relayCatalogSearch').addEventListener('input', renderRelayManagement);
-
+    document.getElementById('relayCatalogSearch').addEventListener('input', () => {
+        relayPage = 0;
+        renderRelayManagement();
+    });
+    document.getElementById('relayPagePrev').addEventListener('click', () => {
+        relayPage = Math.max(0, relayPage - 1);
+        renderRelayManagement();
+    });
+    document.getElementById('relayPageNext').addEventListener('click', () => {
+        relayPage += 1;
+        renderRelayManagement();
+    });
 </script>
 </body>
 </html>

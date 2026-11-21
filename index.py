@@ -120,7 +120,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     self.send_error(403)
                     return
                 length = int(self.headers.get("Content-Length", "0"))
-                if not 0 < length <= 8192:
+                max_size = 2 * 1024 * 1024 if self.path == "/dashboard/relays" else 8192
+                if not 0 < length <= max_size:
                     raise ValueError("Invalid request size")
                 payload = json.loads(self.rfile.read(length))
                 if not isinstance(payload, dict):
@@ -132,8 +133,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             return
         except (ValueError, AttributeError) as error:
             data, status = {"error": str(error)}, 400
+        except dashboard_storage.CatalogFetchError as error:
+            data, status = {"error": str(error)}, 502
         except OSError:
-            data, status = {"error": "Could not read storage or contact Mullvad."}, 502
+            data, status = {"error": "خواندن یا ذخیرهٔ دیتابیس محلی ناموفق بود. دسترسی پوشهٔ storage/database را بررسی کنید."}, 500
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")

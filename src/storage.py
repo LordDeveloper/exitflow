@@ -16,6 +16,7 @@ class CatalogFetchError(Exception):
 
 
 DB_PATH = Path(__file__).resolve().parents[1] / "storage" / "database" / "exitflow.json"
+CATALOG_PATH = DB_PATH.parents[1] / "relays.json"
 LOCK = threading.Lock()
 
 
@@ -86,19 +87,28 @@ def normalize_catalog(rows):
     return [catalog[name] for name in sorted(catalog)]
 
 
+def current_catalog(db):
+    if "relay_catalog_override" in db:
+        return db["relay_catalog_override"]
+    try:
+        return normalize_catalog(json.loads(CATALOG_PATH.read_text(encoding="utf-8-sig")))
+    except FileNotFoundError:
+        return db.get("relays", [])
+
+
 def dispatch(path, method, payload):
     if path == "/dashboard/relays" and method == "POST":
         catalog = normalize_catalog(payload["relays"]) if "relays" in payload else load_catalog()
         with LOCK:
             db = read_database()
-            db["relays"] = catalog
+            db["relay_catalog_override"] = catalog
             write_database(db)
         return catalog
     with LOCK:
         db = read_database()
         settings = db.get("wireguard", {})
         if path == "/dashboard/relays" and method == "GET":
-            return db.get("relays", [])
+            return current_catalog(db)
         if path == "/dashboard/wireguard":
             if method == "GET":
                 return {"address": settings.get("address", ""), "hasKey": bool(settings.get("key"))}
@@ -117,7 +127,7 @@ def dispatch(path, method, payload):
         if path == "/dashboard/provision" and method == "POST":
             if not settings.get("key"):
                 raise ValueError("Save your WireGuard settings first.")
-            relay = next((row for row in db.get("relays", []) if row["name"] == payload.get("name")), None)
+            relay = next((row for row in current_catalog(db) if row["name"] == payload.get("name")), None)
             if relay is None:
                 raise ValueError("Relay is missing from the local catalog.")
             return {"relay": relay, "address": settings["address"], "key": settings["key"]}

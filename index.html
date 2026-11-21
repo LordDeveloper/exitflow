@@ -525,6 +525,33 @@
         .row-warn { background: rgba(245, 158, 11, 0.08); }
         .row-bad { background: rgba(239, 68, 68, 0.11); }
         .row-ok { background: rgba(16, 185, 129, 0.04); }
+
+        .relay-management > summary, .relay-settings-panel > summary { cursor: pointer; font-weight: 700; }
+        .relay-management > summary { font-size: 17px; }
+        .relay-body { display: grid; gap: 14px; margin-top: 16px; min-width: 0; }
+        .relay-settings-panel { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+        .relay-settings, .relay-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 10px; align-items: end; }
+        .relay-settings { margin: 12px 0; }
+        .relay-settings label { display: grid; gap: 6px; font-size: 13px; }
+        .relay-toolbar { grid-template-columns: minmax(0, 1fr) minmax(130px, 190px) auto; }
+        .relay-toolbar input, .relay-toolbar select, .relay-settings input { width: 100%; min-width: 0; }
+        .relay-controls, .relay-feedback, .relay-actions, .relay-pagination { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+        .relay-feedback { justify-content: space-between; color: var(--muted); font-size: 12px; }
+        .relay-feedback span:empty { display: none; }
+        .relay-columns, .relay-row { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(110px, .75fr) minmax(160px, 1fr); gap: 12px; align-items: center; padding: 10px 12px; }
+        .relay-columns { background: rgba(0,0,0,.18); border-radius: 8px; color: var(--muted); font-size: 12px; }
+        .relay-row { border-bottom: 1px solid var(--border); }
+        .relay-identity { display: grid; gap: 4px; overflow-wrap: anywhere; }
+        .relay-name { justify-self: start; }
+        .relay-meta { color: var(--muted); font-size: 12px; }
+        .relay-actions button { width: auto; padding: 6px 10px; font-size: 12px; }
+        .relay-pagination { justify-content: center; }
+        @media (max-width: 680px) {
+            .relay-settings, .relay-toolbar { grid-template-columns: minmax(0, 1fr); }
+            .relay-columns { display: none; }
+            .relay-row { grid-template-columns: minmax(0, 1fr) auto; }
+            .relay-actions { grid-column: 1 / -1; }
+        }
     </style>
 </head>
 <body>
@@ -620,33 +647,47 @@
     </div>
 
     <div id="tabWireguard" class="tab-panel" role="tabpanel" hidden>
-        <details class="card" id="relayManagement">
-            <summary>تنظیمات و مدیریت رله‌های Mullvad</summary>
-            <form id="relaySettings" class="grid">
-                <label>کلید خصوصی WireGuard
-                    <input type="password" id="relayPrivateKey" dir="ltr" autocomplete="new-password">
-                </label>
-                <label>آدرس IPv4 تونل با پیشوند
-                    <input id="relayClientAddress" dir="ltr" placeholder="10.42.0.10/32" required>
-                </label>
-                <button type="submit">ذخیرهٔ تنظیمات</button>
-            </form>
-            <div class="header-flex">
-                <input id="relayCatalogSearch" type="search" placeholder="جستجوی کشور، شهر یا نام رله">
-                <button type="button" id="relayCatalogSync">دریافت فهرست Mullvad</button>
-                <label>فهرست آفلاین
-                    <input id="relayCatalogFile" type="file" accept=".json,application/json">
-                </label>
-                <button type="button" id="relayRouterSync">به‌روزرسانی وضعیت روتر</button>
+        <details class="card relay-management" id="relayManagement">
+            <summary>مدیریت رله‌های Mullvad</summary>
+            <div class="relay-body">
+                <details class="relay-settings-panel">
+                    <summary>تنظیمات WireGuard و منبع فهرست</summary>
+                    <form id="relaySettings" class="relay-settings">
+                        <label for="relayPrivateKey">کلید خصوصی WireGuard
+                            <input type="password" id="relayPrivateKey" dir="ltr" autocomplete="new-password">
+                        </label>
+                        <label for="relayClientAddress">آدرس IPv4 تونل
+                            <input id="relayClientAddress" dir="ltr" placeholder="10.42.0.10/32" required>
+                        </label>
+                        <button type="submit">ذخیرهٔ تنظیمات</button>
+                    </form>
+                    <div class="relay-controls">
+                        <button type="button" id="relayCatalogSync">دریافت فهرست از Mullvad</button>
+                        <button type="button" id="relayCatalogImport">انتخاب فایل JSON</button>
+                        <input id="relayCatalogFile" type="file" accept=".json,application/json" hidden>
+                    </div>
+                </details>
+                <div class="relay-toolbar">
+                    <input id="relayCatalogSearch" type="search" aria-label="جستجوی رله" placeholder="جستجوی کشور، شهر، نام یا IP">
+                    <select id="relayInstallFilter" aria-label="فیلتر وضعیت نصب">
+                        <option value="">همهٔ رله‌ها</option>
+                        <option value="installed">نصب‌شده روی روتر</option>
+                        <option value="available">نصب‌نشده</option>
+                    </select>
+                    <button type="button" id="relayRouterSync">تازه‌سازی وضعیت روتر</button>
+                </div>
+                <div class="relay-feedback">
+                    <span id="relayCatalogStatus" role="status"></span>
+                    <span id="relayManagementStatus" role="status"></span>
+                </div>
+                <div class="relay-columns" aria-hidden="true"><span>رله</span><span>وضعیت روی روتر</span><span>عملیات</span></div>
+                <div id="relayCatalogRows"></div>
+                <nav class="relay-pagination" aria-label="صفحه‌بندی رله‌ها">
+                    <button type="button" id="relayPagePrev">قبلی</button>
+                    <span id="relayPageCount"></span>
+                    <button type="button" id="relayPageNext">بعدی</button>
+                </nav>
             </div>
-            <p id="relayManagementStatus" role="status"></p>
-            <p id="relayCatalogStatus" role="status"></p>
-            <div class="header-flex">
-                <button type="button" id="relayPagePrev">صفحهٔ قبل</button>
-                <span id="relayPageCount"></span>
-                <button type="button" id="relayPageNext">صفحهٔ بعد</button>
-            </div>
-            <div id="relayCatalogRows" style="max-height: 28rem; overflow: auto;"></div>
         </details>
         <div class="card">
             <div class="header-flex">
@@ -4525,9 +4566,15 @@
         for (const name of installedRelays?.keys() || []) {
             if (!catalog.has(name)) catalog.set(name, { name });
         }
+        const filter = document.getElementById('relayInstallFilter').value;
         const matches = Array.from(catalog.values(), relay => ({
             relay, label: [relay.name, relay.country, relay.city, relay.ip].filter(Boolean).join(' · ')
-        })).filter(({ label }) => label.toLowerCase().includes(query));
+        })).filter(({ relay, label }) => {
+            const installed = installedRelays?.has(relay.name);
+            const matchesState = !filter || (installedRelays && (filter === 'installed' ? installed : !installed));
+            return matchesState && label.toLowerCase().includes(query);
+        }).sort((a, b) => Number(Boolean(installedRelays?.has(b.relay.name)))
+            - Number(Boolean(installedRelays?.has(a.relay.name))));
         const pageCount = Math.max(1, Math.ceil(matches.length / relayPageSize));
         relayPage = Math.min(relayPage, pageCount - 1);
         document.getElementById('relayPageCount').textContent = matches.length
@@ -4537,19 +4584,32 @@
         document.getElementById('relayPageNext').disabled = relayPage >= pageCount - 1;
         const rows = document.createDocumentFragment();
         const start = relayPage * relayPageSize;
-        for (const { relay, label } of matches.slice(start, start + relayPageSize)) {
+        for (const { relay } of matches.slice(start, start + relayPageSize)) {
             const iface = installedRelays?.get(relay.name);
             const row = document.createElement('div');
-            row.className = 'header-flex';
-            const description = document.createElement('span');
+            row.className = 'relay-row';
+            const identity = document.createElement('div');
+            identity.className = 'relay-identity';
+            const name = document.createElement('strong');
+            name.className = 'relay-name';
+            name.dir = 'ltr';
+            name.textContent = relay.name;
+            const location = document.createElement('span');
+            location.className = 'relay-meta';
             const catalogState = relay.active === undefined ? 'خارج از فهرست فعلی'
-                : relay.active ? 'فعال در Mullvad' : 'غیرفعال در Mullvad';
-            const routerState = !installedRelays ? 'روتر متصل نیست'
-                : !iface ? 'نصب نشده' : isTrue(iface.disabled) ? 'نصب شده، خاموش' : 'نصب شده، روشن';
-            description.textContent = label + ' · ' + catalogState + ' · ' + routerState;
-            row.append(description);
+                : relay.active ? '' : 'غیرفعال در Mullvad';
+            location.textContent = [relay.country, relay.city, relay.ip, catalogState].filter(Boolean).join(' · ');
+            identity.append(name, location);
+            const state = document.createElement('span');
+            const disabled = iface && isTrue(iface.disabled);
+            state.innerHTML = !installedRelays ? '<span class="badge badge-direct">روتر متصل نیست</span>'
+                : !iface ? '<span class="badge badge-direct">نصب نشده</span>'
+                : disabled ? '<span class="badge badge-warn">خاموش</span>'
+                : '<span class="badge badge-vpn">روشن</span>';
+            row.append(identity, state);
 
-            const actions = document.createElement('span');
+            const actions = document.createElement('div');
+            actions.className = 'relay-actions';
             if (installedRelays) {
                 const buttons = iface ? [
                     [isTrue(iface.disabled) ? 'روشن' : 'خاموش', 'toggle'], ['حذف از روتر', 'remove']
@@ -4561,6 +4621,7 @@
                     const button = document.createElement('button');
                     button.type = 'button';
                     button.textContent = text;
+                    button.className = action === 'remove' ? 'danger' : action === 'add' ? 'success' : 'info';
                     button.disabled = relayBusy;
                     button.addEventListener('click', () => runRelayAction(async () => {
                         if (action === 'add') await installCatalogRelay(relay.name);
@@ -4680,7 +4741,8 @@
         relayCatalogBusy = true;
         const sync = document.getElementById('relayCatalogSync');
         const file = document.getElementById('relayCatalogFile');
-        sync.disabled = file.disabled = true;
+        const importButton = document.getElementById('relayCatalogImport');
+        sync.disabled = file.disabled = importButton.disabled = true;
         relayCatalogStatus.textContent = 'در حال خواندن فهرست…';
         try {
             relayCatalog = await load();
@@ -4691,7 +4753,7 @@
             relayCatalogStatus.textContent = error.message;
         } finally {
             relayCatalogBusy = false;
-            sync.disabled = file.disabled = false;
+            sync.disabled = file.disabled = importButton.disabled = false;
         }
     }
 
@@ -4712,6 +4774,13 @@
     });
     document.getElementById('relayCatalogSync').addEventListener('click', () => {
         void refreshRelayCatalog(() => localDashboard('relays', {}));
+    });
+    document.getElementById('relayCatalogImport').addEventListener('click', () => {
+        document.getElementById('relayCatalogFile').click();
+    });
+    document.getElementById('relayInstallFilter').addEventListener('change', () => {
+        relayPage = 0;
+        renderRelayManagement();
     });
     document.getElementById('relayCatalogFile').addEventListener('change', event => {
         const input = event.currentTarget;

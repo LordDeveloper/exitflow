@@ -2,6 +2,7 @@ import urllib.request
 import ipaddress
 import json
 import os
+from pathlib import Path
 import ssl
 
 URL = "https://api.mullvad.net/www/relays/wireguard/"
@@ -26,9 +27,11 @@ WG_ENDPOINT_PORT = 51820
 FILTER_COUNTRIES = []
 
 def get_relays_data():
-    if os.path.exists(LOCAL_JSON):
-        print(f"Reading relays from local file '{LOCAL_JSON}'...")
-        with open(LOCAL_JSON, "r", encoding="utf-8") as f:
+    for source in (Path(LOCAL_JSON), Path(__file__).resolve().parent / "storage" / LOCAL_JSON):
+        if not source.is_file():
+            continue
+        print(f"Reading relays from local file '{source}'...")
+        with source.open(encoding="utf-8-sig") as f:
             return json.load(f)
 
     print(f"Downloading Mullvad WireGuard relays from {URL}...")

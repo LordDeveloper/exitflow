@@ -526,9 +526,8 @@
         .row-bad { background: rgba(239, 68, 68, 0.11); }
         .row-ok { background: rgba(16, 185, 129, 0.04); }
 
-        .relay-management > summary { cursor: pointer; font-weight: 700; }
         .relay-settings-panel > h3 { margin: 0; font-size: 15px; }
-        .relay-management > summary { font-size: 17px; }
+        .relay-management > h2 { margin: 0; font-size: 17px; }
         .relay-body { display: grid; gap: 14px; margin-top: 16px; min-width: 0; }
         .relay-settings-panel { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
         .relay-settings, .relay-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 10px; align-items: end; }
@@ -540,8 +539,21 @@
         .relay-feedback { justify-content: space-between; color: var(--muted); font-size: 12px; }
         .relay-feedback span:empty { display: none; }
         #relayCatalogRows { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr)); gap: 12px; }
-        .relay-city { border: 1px solid var(--border); border-radius: 10px; padding: 12px; min-width: 0; }
-        .relay-city h3 { margin: 0 0 8px; font-size: 15px; }
+        .relay-city { border: 1px solid #2b5549; border-radius: 13px; padding: 13px; min-width: 0; background: #14251f; }
+        .relay-city-header { display: flex; align-items: center; gap: 8px; border-radius: 8px; padding: 7px 9px; background: linear-gradient(120deg, #213a2d, #15222b); }
+        .relay-flag { font-size: 20px; line-height: 1; }
+        .relay-flag:empty { display: none; }
+        .relay-peer-title { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; overflow-wrap: anywhere; }
+        .relay-state { border-radius: 20px; background: #263249; color: #c6d1e4; padding: 3px 8px; font-size: 12px; white-space: nowrap; }
+        .relay-state[data-state="on"] { background: #1e4432; color: #87ecb8; }
+        .relay-metrics { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; }
+        .relay-metrics > div { grid-column: span 2; display: grid; gap: 2px; place-content: center; text-align: center; padding: 7px 4px; border: 1px solid #30413d; border-radius: 8px; background: #172322; overflow-wrap: anywhere; }
+        .relay-metrics strong { font-size: 13px; }
+        .relay-metrics span, .relay-metrics small { color: #b4c5c3; font-size: 11px; }
+        .relay-metrics .relay-rx, .relay-metrics .relay-tx { grid-column: span 3; }
+        .relay-metrics .relay-rx { color: #94e8ff; background: #173438; border-color: #2e6674; }
+        .relay-metrics .relay-tx { color: #9cf0c4; background: #17362b; border-color: #30705a; }
+        .relay-city h3 { margin: 0; font-size: 15px; }
         .relay-peer { display: grid; gap: 8px; padding: 8px 0; }
         .relay-peer + .relay-peer { border-top: 1px solid var(--border); }
         .relay-meta { color: var(--muted); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
@@ -648,8 +660,8 @@
     </div>
 
     <div id="tabWireguard" class="tab-panel" role="tabpanel" hidden>
-        <details class="card relay-management" id="relayManagement">
-            <summary>مدیریت رله‌های Mullvad</summary>
+        <section class="card relay-management" id="relayManagement">
+            <h2>Peerهای WireGuard</h2>
             <div class="relay-body">
                 <section class="relay-settings-panel" aria-label="تنظیمات WireGuard">
                     <h3>تنظیمات WireGuard</h3>
@@ -683,22 +695,7 @@
                     <button type="button" id="relayPageNext">بعدی</button>
                 </nav>
             </div>
-        </details>
-        <div class="card">
-            <div class="header-flex">
-                <h2>اینترفیس‌های WireGuard</h2>
-                <div class="filter-box">
-                    <input type="text" id="wgIfaceFilter" dir="auto" placeholder="فیلتر اینترفیس، کشور یا شهر" autocomplete="off">
-                    <label class="switch" for="busyServersOnly">
-                        <input type="checkbox" id="busyServersOnly" checked>
-                        <span class="switch-ui" aria-hidden="true"></span>
-                        <span>فقط سرورهای دارای ترافیک</span>
-                        <span class="switch-count" id="busyServerCount"></span>
-                    </label>
-                </div>
-            </div>
-            <div class="peers-grid" id="wgGrid" data-empty="ابتدا به روتر متصل شوید."></div>
-        </div>
+        </section>
     </div>
 
     <div id="tabPathTest" class="tab-panel" role="tabpanel" hidden>
@@ -941,9 +938,7 @@
     const LS_USER = 'mullvadDash.username';
     const LS_PASS = 'mullvadDash.password';
     const LS_LOGGED_IN = 'mullvadDash.loggedIn';
-    const LS_BUSY = 'mullvadDash.busyServers';
     const LS_WIRED = 'mullvadDash.showWired';
-    const TRAFFIC_HOLD_MS = 20000;
     const DEFAULT_ROUTER_IP = '192.168.0.150';
     const POLL_MS = 2000;
     const SPEED_GAP_MAX = 15;
@@ -964,9 +959,7 @@
     let busy = false;
     let pollInFlight = false;
     let monitoring = false;
-    let peerKeyOrder = [];
     let wgCatalog = [];
-    const trafficHold = new Map();
     let clientKeyOrder = [];
     let latestClientRows = [];
     let latestClientSpeeds = new Map();
@@ -1341,11 +1334,12 @@
         dhcpLeases = [];
         wgCatalog = [];
         latestClientRows = [];
-        peerKeyOrder = [];
         clientKeyOrder = [];
         resetSpeedWindow();
         emptyTable();
-        renderWgInterfaces();
+        installedRelays = null;
+        document.getElementById('wgTabCount').textContent = '0';
+        renderRelayManagement();
         setHeal('');
         setPollStatus('');
         try {
@@ -2374,73 +2368,6 @@
         if (el.textContent !== next) el.textContent = next;
     }
 
-    function buildPeerCard() {
-        const card = document.createElement('article');
-        card.className = 'peer-card';
-        card.innerHTML = `
-            <div class="peer-top">
-                <div>
-                    <div class="peer-title" data-field="name"></div>
-                    <div class="peer-sub" data-field="comment"></div>
-                </div>
-                <span class="badge" data-field="hs"></span>
-            </div>
-            <div class="endpoint" data-field="endpoint"></div>
-            <div class="stats-row">
-                <span>سرعت زنده</span>
-                <span><span class="speed-down" data-field="rxS"></span><span class="sep">|</span><span class="speed-up" data-field="txS"></span></span>
-            </div>
-            <div class="stats-row">
-                <span>حجم اینترفیس</span>
-                <span dir="ltr" data-field="vol"></span>
-            </div>
-            <div class="stats-row">
-                <span>ترافیک Mangle</span>
-                <span dir="ltr" data-field="mangle"></span>
-            </div>
-            <div class="peer-clients" data-field="clients"></div>
-            <div class="peer-test">
-                <button type="button" class="compact" data-action="test-path">تست مسیر</button>
-                <button type="button" class="info compact" data-action="diagnose-peer">🩺 MTR و عیب‌یابی</button>
-                <span class="test-result muted" data-field="test"></span>
-            </div>
-            <div class="peer-controls">
-                <button type="button" class="compact" data-action="toggle-peer"></button>
-                <button type="button" class="warning compact" data-action="restart-peer">🔄 ریستارت Peer</button>
-            </div>
-        `;
-        return card;
-    }
-
-    function renderPeerCard(card, model) {
-        card.classList.toggle('bad', !model.health.ok);
-        card.classList.toggle('good', model.health.ok);
-        card.classList.toggle('is-disabled', Boolean(model.disabled));
-        const toggleBtn = card.querySelector('button[data-action="toggle-peer"]');
-        if (toggleBtn) {
-            toggleBtn.textContent = model.disabled ? '▶ فعال‌سازی' : '⏸ غیرفعال‌سازی';
-            toggleBtn.className = 'compact ' + (model.disabled ? 'success' : 'danger');
-        }
-        setText(card.querySelector('[data-field="name"]'), model.name);
-        setText(card.querySelector('[data-field="comment"]'), model.comment || 'سرور WireGuard مولواد');
-        const badge = card.querySelector('[data-field="hs"]');
-        badge.className = 'badge ' + (model.health.ok ? 'badge-ok' : 'badge-bad');
-        setText(badge, model.health.text);
-        setText(card.querySelector('[data-field="endpoint"]'), model.health.endpoint ? ('Endpoint ' + model.health.endpoint) : 'Endpoint نامشخص');
-        setText(card.querySelector('[data-field="rxS"]'), '⬇ ' + formatSpeed(model.stats.rxSpeed));
-        setText(card.querySelector('[data-field="txS"]'), '⬆ ' + formatSpeed(model.stats.txSpeed));
-        setText(card.querySelector('[data-field="vol"]'), '⬇ ' + formatBytes(model.stats.rx) + '   ⬆ ' + formatBytes(model.stats.tx));
-        setText(card.querySelector('[data-field="mangle"]'), formatBytes(model.mangleBytes));
-        const clientsEl = card.querySelector('[data-field="clients"]');
-        const chips = model.clients.map((client) => `<span class="client-chip">${esc(client.host)} (${esc(client.ip)})</span>`).join('');
-        const html = `<strong>کلاینت‌های متصل (${model.clients.length}):</strong><br>${chips || '<span class="muted">کلاینت ثبت‌شده‌ای ندارد؛ ترافیک زنده دیده شد.</span>'}`;
-        if (clientsEl.dataset.sig !== html) {
-            clientsEl.dataset.sig = html;
-            clientsEl.innerHTML = html;
-        }
-        paintPeerTest(model.name);
-    }
-
     function summarizePing(payload) {
         const rows = asList(payload);
         const summary = rows.slice().reverse().find((row) => row && (row['packet-loss'] != null || (row.sent != null && row.received != null && row.seq == null)));
@@ -2453,16 +2380,6 @@
 
     function paintPeerTest(name) {
         const info = peerTests.get(name);
-        const card = document.querySelector(`#wgGrid [data-key="${CSS.escape(name)}"]`);
-        if (card) {
-            const el = card.querySelector('[data-field="test"]');
-            const button = card.querySelector('button[data-action="test-path"]');
-            if (el) {
-                el.className = 'test-result ' + (!info ? 'muted' : info.state === 'ok' ? 'ok' : info.state === 'fail' ? 'bad' : 'muted');
-                setText(el, info ? info.text : 'بدون وصل کردن کلاینت');
-            }
-            if (button) button.disabled = Boolean(info && info.state === 'running');
-        }
         const bar = document.getElementById('pathTestResult');
         const barButton = document.getElementById('pathTestBtn');
         const selectedVal = document.getElementById('pathTestPeerValue');
@@ -2514,7 +2431,7 @@
             }
             const summary = summarizePing(result);
             if (summary.received > 0) {
-                peerTests.set(name, { state: 'ok', text: `مسیر به ${target} باز است · ${summary.received} از ${summary.sent} جواب` + (summary.avg ? ' · ' + summary.avg : '') });
+                peerTests.set(name, { state: 'ok', avg: summary.avg, text: `مسیر به ${target} باز است · ${summary.received} از ${summary.sent} جواب` + (summary.avg ? ' · ' + summary.avg : '') });
             } else {
                 peerTests.set(name, { state: 'fail', text: `بسته‌ها به ${target} جواب نگرفتند. از این Peer اینترنت رد نمی‌شود` });
             }
@@ -2668,59 +2585,6 @@
         });
     }
 
-    function wgIfaceQuery() {
-        const field = document.getElementById('wgIfaceFilter');
-        return field ? field.value : '';
-    }
-
-    function busyOnlyEnabled() {
-        const box = document.getElementById('busyServersOnly');
-        return !box || box.checked;
-    }
-
-    function serverBusy(model) {
-        if (!model) return false;
-        if (model.clients && model.clients.length) return true;
-        if ((model.stats && model.stats.rxSpeed) > 0 || (model.stats && model.stats.txSpeed) > 0) return true;
-        const seen = trafficHold.get(model.name) || 0;
-        return Date.now() - seen < TRAFFIC_HOLD_MS;
-    }
-
-    function renderWgInterfaces() {
-        const grid = document.getElementById('wgGrid');
-        const count = document.getElementById('wgTabCount');
-        const busyOnly = busyOnlyEnabled();
-        const busyNames = wgCatalog.filter(serverBusy);
-        if (count) count.textContent = busyOnly ? String(busyNames.length) : String(wgCatalog.length);
-        const busyLabel = document.getElementById('busyServerCount');
-        if (busyLabel) busyLabel.textContent = wgCatalog.length ? (busyNames.length + ' از ' + wgCatalog.length) : '';
-        if (!grid) return;
-        const query = wgIfaceQuery();
-        if (query) grid.dataset.empty = 'اینترفیسی با این فیلتر پیدا نشد.';
-        else if (busyOnly) grid.dataset.empty = monitoring ? 'الان سروری با ترافیک زنده یا کلاینت متصل نیست.' : 'ابتدا به روتر متصل شوید.';
-        else grid.dataset.empty = monitoring ? 'اینترفیس WireGuard پیدا نشد.' : 'ابتدا به روتر متصل شوید.';
-        const matched = new Set(wgCatalog.filter((model) => {
-            if (busyOnly && !serverBusy(model)) return false;
-            if (!query) return true;
-            const clients = model.clients.map((client) => client.host + ' ' + client.ip).join(' ');
-            const endpoint = model.health && model.health.endpoint ? model.health.endpoint : '';
-            return matchesFilter([model.name, model.comment, endpoint, clients].join(' '), query);
-        }).map((model) => model.name));
-        peerKeyOrder = stableKeys(peerKeyOrder, wgCatalog.map((model) => model.name));
-        const visible = peerKeyOrder.filter((name) => matched.has(name));
-        const byName = new Map(wgCatalog.map((model) => [model.name, model]));
-        syncKeyed(
-            grid,
-            visible,
-            () => buildPeerCard(),
-            (card, key) => renderPeerCard(card, byName.get(key))
-        );
-        const pathPicker = document.getElementById('pathTestPicker');
-        if (pathPicker) {
-            setPickerValue(pathPicker, pickerValue(pathPicker), false);
-        }
-    }
-
     function showTab(name) {
         document.getElementById('tabClients').hidden = name !== 'clients';
         document.getElementById('tabWireguard').hidden = name !== 'wireguard';
@@ -2731,6 +2595,7 @@
             button.classList.toggle('active', selected);
             button.setAttribute('aria-selected', selected ? 'true' : 'false');
         });
+        if (name === 'wireguard') loadRelayPanel();
         if (name === 'rulesaudit' && monitoring) {
             runRulesAndFactorsAudit();
         }
@@ -2930,13 +2795,9 @@
                 };
                 return rank(a) - rank(b) || a.name.localeCompare(b.name, 'en');
             });
-            const nowTraffic = Date.now();
-            wgCatalog.forEach((model) => {
-                if ((model.stats.rxSpeed || 0) > 0 || (model.stats.txSpeed || 0) > 0 || model.clients.length) {
-                    trafficHold.set(model.name, nowTraffic);
-                }
-            });
-            renderWgInterfaces();
+            document.getElementById('wgTabCount').textContent = String(wgCatalog.length);
+            const pathPicker = document.getElementById('pathTestPicker');
+            setPickerValue(pathPicker, pickerValue(pathPicker), false);
             updateRelayCardStats();
             updateSummaryStatus();
         } finally {
@@ -3129,7 +2990,6 @@
                 localStorage.setItem(LS_LOGGED_IN, '1');
             } catch (err) { /* private mode */ }
             setAuthUi(true, loginUser || 'admin');
-            peerKeyOrder = [];
             clientKeyOrder = [];
             resetSpeedWindow();
             monitoring = true;
@@ -3150,7 +3010,7 @@
             void loadClientsSection(now).catch((err) => setPollStatus('خطا در بخش کلاینت‌ها: ' + err.message));
             void loadWireguardSection(now).catch((err) => setPollStatus('خطا در بخش WireGuard: ' + err.message));
             void loadRouterHealthSection();
-            if (relayManagement.open) {
+            if (!document.getElementById('tabWireguard').hidden) {
                 void runRelayAction(loadInstalledRelays);
             }
 
@@ -3334,17 +3194,6 @@
         }
     }
 
-    function loadBusyPref() {
-        const box = document.getElementById('busyServersOnly');
-        if (!box) return;
-        try {
-            const saved = localStorage.getItem(LS_BUSY);
-            box.checked = saved == null ? true : saved === '1';
-        } catch (err) {
-            box.checked = true;
-        }
-    }
-
     function loadSavedLogin() {
         try {
             const savedIp = localStorage.getItem(LS_IP) || DEFAULT_ROUTER_IP;
@@ -3376,9 +3225,6 @@
         const button = event.target.closest('button[data-tab]');
         if (!button) return;
         showTab(button.dataset.tab);
-    });
-    document.getElementById('wgIfaceFilter').addEventListener('input', () => {
-        renderWgInterfaces();
     });
     document.getElementById('pathTestBtn').addEventListener('click', testPeerFromQuery);
     ['pathTestTargetIp', 'pathTestCount'].forEach((id) => {
@@ -3434,27 +3280,6 @@
         await apiFetch(`/interface/wireguard/${assertId(target['.id'])}`, 'PATCH', {
             disabled: disable ? 'true' : 'false'
         });
-    }
-
-    async function togglePeerInterface(ifaceName) {
-        if (!monitoring || busy) return;
-        const model = wgCatalog.find((m) => m.name === ifaceName);
-        const nextDisable = model ? !model.disabled : true;
-        setBusy(true);
-        try {
-            setStatus(nextDisable ? `در حال غیرفعال کردن ${ifaceName}...` : `در حال فعال کردن ${ifaceName}...`);
-            await setPeerDisabledState(ifaceName, nextDisable);
-            if (!nextDisable && ifaceName.startsWith('mv-wg-')) {
-                await ensurePeerDataPath(ifaceName).catch(() => {});
-            }
-            resetSpeedWindow();
-            await loadWireguardSection(Date.now());
-            setStatus(nextDisable ? `اینترفیس ${ifaceName} غیرفعال شد.` : `اینترفیس ${ifaceName} فعال شد.`);
-        } catch (err) {
-            setStatus('خطا در تغییر وضعیت Peer: ' + err.message, true);
-        } finally {
-            setBusy(false);
-        }
     }
 
     async function restartPeerInterface(ifaceName) {
@@ -3983,22 +3808,6 @@
         }
     }
 
-    document.getElementById('wgGrid').addEventListener('click', (event) => {
-        const button = event.target.closest('button[data-action]');
-        if (!button) return;
-        const card = button.closest('[data-key]');
-        const peerName = card && card.dataset.key;
-        if (!peerName) return;
-        const action = button.dataset.action;
-        if (action === 'test-path') testPeerPath(peerName);
-        else if (action === 'toggle-peer') togglePeerInterface(peerName);
-        else if (action === 'restart-peer') restartPeerInterface(peerName);
-        else if (action === 'diagnose-peer') openDiagnoseModal(peerName);
-    });
-    document.getElementById('busyServersOnly').addEventListener('change', (event) => {
-        try { localStorage.setItem(LS_BUSY, event.target.checked ? '1' : '0'); } catch (err) { /* private mode */ }
-        renderWgInterfaces();
-    });
     document.getElementById('showWired').addEventListener('change', (event) => {
         try { localStorage.setItem(LS_WIRED, event.target.checked ? '1' : '0'); } catch (err) { /* private mode */ }
         if (latestClientRows.length || monitoring) renderClientTable();
@@ -4513,10 +4322,8 @@
     });
 
     const resumeSession = loadSavedLogin();
-    loadBusyPref();
     loadWiredPref();
     emptyTable();
-    renderWgInterfaces();
     if (resumeSession) connectAndStart();
     const relayManagement = document.getElementById('relayManagement');
     const relayStatus = document.getElementById('relayManagementStatus');
@@ -4561,8 +4368,10 @@
             if (byInterface.has(peer.interface)) byInterface.set(peer.interface, null);
             else byInterface.set(peer.interface, peer);
         }
-        installedRelays = new Map(rows.filter(row => /^mv-wg-[a-z0-9-]+$/.test(row.name))
-            .map(row => [row.name.slice(6), { ...row, peer: byInterface.get(row.name) }]));
+        installedRelays = new Map(rows.filter(row => row.name).map(row => [
+            row.name.startsWith('mv-wg-') ? row.name.slice(6) : row.name,
+            { ...row, peer: byInterface.get(row.name) }
+        ]));
     }
 
     function relayButton(label, style, action, disabled = false) {
@@ -4609,11 +4418,21 @@
         for (const city of matches.slice(start, start + relayPageSize)) {
             const card = document.createElement('section');
             card.className = 'relay-city';
+            const countryCode = city.country ? city.relays[0].name.split('-')[0].replace(/^uk$/, 'gb') : '';
+            const flag = /^[a-z]{2}$/.test(countryCode)
+                ? String.fromCodePoint(...Array.from(countryCode, letter => letter.charCodeAt(0) + 127365)) : '';
+            const header = document.createElement('header');
+            header.className = 'relay-city-header';
             const heading = document.createElement('h3');
             heading.textContent = [city.city, city.country].filter(Boolean).join(' · ');
-            card.append(heading);
+            const flagIcon = document.createElement('span');
+            flagIcon.className = 'relay-flag';
+            flagIcon.setAttribute('aria-hidden', 'true');
+            flagIcon.textContent = flag;
+            header.append(flagIcon, heading);
+            card.append(header);
             for (const iface of city.installed) card.append(buildCityPeer(city.relays, iface));
-            const available = city.relays.filter(relay => !installedRelays?.has(relay.name)
+            const available = city.relays.filter(relay => relay.ip && !installedRelays?.has(relay.name)
                 && !city.installed.some(iface => iface.peer?.['endpoint-address'] === relay.ip
                     && iface.peer?.['public-key'] === relay.publicKey));
             if (!city.installed.length || available.length) card.append(buildCityPeer(available, null));
@@ -4633,16 +4452,25 @@
         const title = document.createElement('strong');
         title.textContent = iface ? (current?.name || iface.name) : `${relays.length} رله`;
         const state = document.createElement('span');
-        state.className = 'relay-meta';
+        state.className = 'relay-state';
+        state.dataset.state = iface && !disabled ? 'on' : 'off';
         state.textContent = !installedRelays ? 'روتر متصل نیست' : !iface ? 'نصب نشده' : disabled ? 'خاموش' : 'روشن';
-        card.append(title, state);
+        const titleRow = document.createElement('div');
+        titleRow.className = 'relay-peer-title';
+        titleRow.append(title, state);
+        card.append(titleRow);
         const actions = document.createElement('div');
         actions.className = 'relay-actions';
         if (iface) {
             card.dataset.relayInterface = iface.name;
             const stats = document.createElement('div');
-            stats.className = 'relay-meta';
-            stats.dataset.relayStats = '';
+            stats.className = 'relay-metrics';
+            stats.innerHTML = `
+                <div><strong data-metric="health">—</strong><span>Handshake</span></div>
+                <div><strong data-metric="clients">—</strong><span>کلاینت تخصیص‌یافته</span></div>
+                <div><strong data-metric="latency">—</strong><span>پینگ</span></div>
+                <div class="relay-rx"><strong data-metric="rxSpeed">—</strong><span>↓ دریافت</span><small data-metric="rx"></small></div>
+                <div class="relay-tx"><strong data-metric="txSpeed">—</strong><span>↑ ارسال</span><small data-metric="tx"></small></div>`;
             const result = document.createElement('div');
             result.className = 'relay-meta';
             result.dataset.relayResult = '';
@@ -4657,12 +4485,13 @@
                     updateRelayCardStats();
                 }, disabled || relayBusy),
                 relayButton('MTR و عیب‌یابی', 'info', () => openDiagnoseModal(iface.name), relayBusy),
-                relayButton('حذف', 'danger', () => {
+                relayButton('راه‌اندازی مجدد', 'info', () => mutateRelay(() => restartPeerInterface(iface.name)), relayBusy || Boolean(disabled))
+            );
+            if (iface.name.startsWith('mv-wg-')) actions.append(relayButton('حذف', 'danger', () => {
                     if (window.confirm('با حذف این رله، تخصیص کلاینت‌های آن پاک می‌شود. ادامه می‌دهید؟')) {
                         mutateRelay(() => removeCatalogRelay(iface));
                     }
-                }, relayBusy)
-            );
+                }, relayBusy));
         }
         card.append(actions);
 
@@ -4692,18 +4521,25 @@
     }
 
     function updateRelayCardStats() {
-        if (!relayManagement.open) return;
+        if (document.getElementById('tabWireguard').hidden) return;
         const models = new Map(wgCatalog.map(model => [model.name, model]));
         for (const card of relayManagement.querySelectorAll('[data-relay-interface]')) {
             const name = card.dataset.relayInterface;
             const model = models.get(name);
-            const text = model ? [
-                model.health.text, `${model.clients.length} کلاینت تخصیص‌یافته`,
-                `دریافت ${formatSpeed(model.stats.rxSpeed)} · ارسال ${formatSpeed(model.stats.txSpeed)}`,
-                `حجم RX ${formatBytes(model.stats.rx)} · TX ${formatBytes(model.stats.tx)}`
-            ].join(' | ') : 'در انتظار آمار روتر';
-            setText(card.querySelector('[data-relay-stats]'), text);
-            setText(card.querySelector('[data-relay-result]'), peerTests.get(name)?.text || '');
+            const test = peerTests.get(name);
+            const metrics = {
+                health: model?.health.text || '—',
+                clients: model ? String(model.clients.length) : '—',
+                latency: test?.avg || '—',
+                rxSpeed: model ? formatSpeed(model.stats.rxSpeed) : '—',
+                txSpeed: model ? formatSpeed(model.stats.txSpeed) : '—',
+                rx: model ? formatBytes(model.stats.rx) : '',
+                tx: model ? formatBytes(model.stats.tx) : ''
+            };
+            for (const field of card.querySelectorAll('[data-metric]')) {
+                setText(field, metrics[field.dataset.metric]);
+            }
+            setText(card.querySelector('[data-relay-result]'), test?.text || '');
         }
     }
 
@@ -4847,15 +4683,19 @@
         }
     }
 
-    relayManagement.addEventListener('toggle', () => {
-        if (!relayManagement.open) return;
+    let relaySettingsLoaded = false;
+    function loadRelayPanel() {
         renderRelayManagement();
         void refreshRelayCatalog(() => localDashboard('relays'),
             'فهرست رله‌های محلی در دسترس نیست.');
-        void localDashboard('wireguard').then(showRelaySettings)
-            .catch(error => { relayStatus.textContent = error.message; });
-        if (monitoring) void runRelayAction(loadInstalledRelays);
-    });
+        if (!relaySettingsLoaded) {
+            void localDashboard('wireguard').then(settings => {
+                showRelaySettings(settings);
+                relaySettingsLoaded = true;
+            }).catch(error => { relayStatus.textContent = error.message; });
+        }
+        if (monitoring && !installedRelays) void runRelayAction(loadInstalledRelays);
+    }
     document.getElementById('relaySettings').addEventListener('submit', event => {
         event.preventDefault();
         void runRelayAction(async () => showRelaySettings(await localDashboard('wireguard', {

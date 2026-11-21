@@ -620,6 +620,25 @@
     </div>
 
     <div id="tabWireguard" class="tab-panel" role="tabpanel" hidden>
+        <details class="card" id="relayManagement">
+            <summary>تنظیمات و مدیریت رله‌های Mullvad</summary>
+            <form id="relaySettings" class="grid">
+                <label>کلید خصوصی WireGuard
+                    <input type="password" id="relayPrivateKey" dir="ltr" autocomplete="new-password">
+                </label>
+                <label>آدرس IPv4 تونل با پیشوند
+                    <input id="relayClientAddress" dir="ltr" placeholder="10.42.0.10/32" required>
+                </label>
+                <button type="submit">ذخیرهٔ تنظیمات</button>
+            </form>
+            <div class="header-flex">
+                <input id="relayCatalogSearch" type="search" placeholder="جستجوی کشور، شهر یا نام رله">
+                <button type="button" id="relayCatalogSync">دریافت فهرست Mullvad</button>
+                <button type="button" id="relayRouterSync">به‌روزرسانی وضعیت روتر</button>
+            </div>
+            <p id="relayManagementStatus" role="status"></p>
+            <div id="relayCatalogRows" style="max-height: 28rem; overflow: auto;"></div>
+        </details>
         <div class="card">
             <div class="header-flex">
                 <h2>اینترفیس‌های WireGuard</h2>
@@ -1812,6 +1831,7 @@
                 chain: 'prerouting',
                 action: 'mark-routing',
                 'src-address-list': peerName,
+                'dst-address-type': '!local',
                 'new-routing-mark': peerName,
                 passthrough: 'no',
                 comment: 'client via ' + peerName
@@ -3076,6 +3096,9 @@
             void loadClientsSection(now).catch((err) => setPollStatus('خطا در بخش کلاینت‌ها: ' + err.message));
             void loadWireguardSection(now).catch((err) => setPollStatus('خطا در بخش WireGuard: ' + err.message));
             void loadRouterHealthSection();
+            if (relayManagement.open) {
+                void runRelayAction(loadInstalledRelays);
+            }
 
             const clock = document.getElementById('lastUpdateText');
             if (clock) clock.textContent = 'آخرین آپدیت: ' + new Date(now).toLocaleTimeString('fa-IR');
@@ -4442,6 +4465,207 @@
     emptyTable();
     renderWgInterfaces();
     if (resumeSession) connectAndStart();
+    const relayManagement = document.getElementById('relayManagement');
+    const relayStatus = document.getElementById('relayManagementStatus');
+    const relayKeyInput = document.getElementById('relayPrivateKey');
+    const relayAddressInput = document.getElementById('relayClientAddress');
+    let relayCatalog = [];
+    let installedRelays = null;
+    let relayBusy = false;
+
+    async function localDashboard(path, data) {
+        const response = await fetch('/dashboard/' + path, data === undefined ? {} : {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'خطا در سرور محلی');
+        return result;
+    }
+
+    function showRelaySettings(settings) {
+        relayAddressInput.value = settings.address;
+        relayKeyInput.value = '';
+        relayKeyInput.placeholder = settings.hasKey ? 'کلید ذخیره شده است' : 'کلید کانفیگ Mullvad';
+    }
+
+    async function loadInstalledRelays() {
+        installedRelays = null;
+        if (!monitoring) return;
+        const rows = await apiList('/interface/wireguard?.proplist=.id,name,disabled');
+        installedRelays = new Map(rows.filter(row => /^mv-wg-[a-z0-9-]+$/.test(row.name))
+            .map(row => [row.name.slice(6), row]));
+    }
+
+    function renderRelayManagement() {
+        const query = document.getElementById('relayCatalogSearch').value.trim().toLowerCase();
+        const catalog = new Map(relayCatalog.map(relay => [relay.name, relay]));
+        for (const name of installedRelays?.keys() || []) {
+            if (!catalog.has(name)) catalog.set(name, { name });
+        }
+        const rows = document.createDocumentFragment();
+        for (const relay of catalog.values()) {
+            const label = [relay.name, relay.country, relay.city, relay.ip].filter(Boolean).join(' · ');
+            if (!label.toLowerCase().includes(query)) continue;
+            const iface = installedRelays?.get(relay.name);
+            const row = document.createElement('div');
+            row.className = 'header-flex';
+            const description = document.createElement('span');
+            const catalogState = relay.active === undefined ? 'خارج از فهرست فعلی'
+                : relay.active ? 'فعال در Mullvad' : 'غیرفعال در Mullvad';
+            const routerState = !installedRelays ? 'روتر متصل نیست'
+                : !iface ? 'نصب نشده' : isTrue(iface.disabled) ? 'نصب شده، خاموش' : 'نصب شده، روشن';
+            description.textContent = label + ' · ' + catalogState + ' · ' + routerState;
+            row.append(description);
+
+            const actions = document.createElement('span');
+            if (installedRelays) {
+                const buttons = iface ? [
+                    [isTrue(iface.disabled) ? 'روشن' : 'خاموش', 'toggle'], ['حذف از روتر', 'remove']
+                ] : [['افزودن به روتر', 'add']];
+                if (iface && isTrue(iface.disabled) && relay.ip) {
+                    buttons.unshift(['تکمیل نصب و روشن‌کردن', 'add']);
+                }
+                for (const [text, action] of buttons) {
+                    const button = document.createElement('button');
+                    button.type = 'button';
+                    button.textContent = text;
+                    button.disabled = relayBusy;
+                    button.addEventListener('click', () => runRelayAction(async () => {
+                        if (action === 'add') await installCatalogRelay(relay.name);
+                        if (action === 'toggle') {
+                            await apiFetch('/interface/wireguard/' + assertId(iface['.id']), 'PATCH', {
+                                disabled: isTrue(iface.disabled) ? 'no' : 'yes'
+                            });
+                        }
+                        if (action === 'remove') {
+                            if (!window.confirm('رله از روتر حذف شود؟ اتصال کلاینت‌های روی این رله قطع می‌شود.')) return;
+                            await removeCatalogRelay(iface);
+                        }
+                        await loadInstalledRelays();
+                        await refreshAll();
+                    }));
+                    actions.append(button);
+                }
+            }
+            row.append(actions);
+            rows.append(row);
+        }
+        document.getElementById('relayCatalogRows').replaceChildren(rows);
+    }
+
+    async function runRelayAction(action) {
+        if (relayBusy) return;
+        relayBusy = true;
+        relayStatus.textContent = 'در حال انجام…';
+        renderRelayManagement();
+        try {
+            await action();
+            relayStatus.textContent = 'انجام شد';
+        } catch (error) {
+            relayStatus.textContent = error.message;
+        } finally {
+            relayBusy = false;
+            renderRelayManagement();
+        }
+    }
+
+    async function installCatalogRelay(name) {
+        const { relay, address, key } = await localDashboard('provision', { name });
+        const iface = 'mv-wg-' + relay.name;
+        const [interfaces, peers, routes, tables, addresses] = await Promise.all([
+            apiList('/interface/wireguard?.proplist=.id,name,disabled'),
+            apiList('/interface/wireguard/peers?.proplist=.id,interface,endpoint-address,current-endpoint-address'),
+            apiList('/ip/route?.proplist=.id,dst-address,gateway,routing-table,disabled'),
+            apiList('/routing/table?.proplist=.id,name'),
+            apiList('/ip/address?.proplist=.id,address,interface')
+        ]);
+        const prefix = relay.ip + '/32';
+        if (peers.some(peer => peer.interface === 'toTR'
+            && [peer['endpoint-address'], peer['current-endpoint-address']].includes(relay.ip))) {
+            throw new Error('آدرس این رله با endpoint خود toTR یکی است');
+        }
+        const existingRoute = routes.some(route => route['routing-table'] === 'main'
+            && normPrefix(route['dst-address']) === prefix && !isTrue(route.disabled));
+        if (!existingRoute && !interfaces.some(item => item.name === 'toTR' && !isTrue(item.disabled))) {
+            throw new Error('برای این endpoint مسیر /32 یا اینترفیس فعال toTR لازم است');
+        }
+
+        if (!interfaces.some(item => item.name === iface)) {
+            // Do not expose the private key if RouterOS echoes it in an error.
+            try {
+                await apiFetch('/interface/wireguard', 'PUT', {
+                    name: iface, 'private-key': key, mtu: 1320, disabled: 'yes'
+                });
+            } catch {
+                throw new Error('ساخت اینترفیس WireGuard روی روتر ناموفق بود');
+            }
+        }
+        if (!existingRoute) {
+            await apiFetch('/ip/route', 'PUT', {
+                'dst-address': prefix, gateway: 'toTR', 'routing-table': 'main',
+                comment: 'Mullvad endpoint via toTR'
+            });
+        }
+        if (!addresses.some(row => row.interface === iface && row.address === address)) {
+            await apiFetch('/ip/address', 'PUT', { address, interface: iface });
+        }
+        if (!peers.some(peer => peer.interface === iface)) {
+            await apiFetch('/interface/wireguard/peers', 'PUT', {
+                interface: iface, 'public-key': relay.publicKey, 'endpoint-address': relay.ip,
+                'endpoint-port': '51820', 'allowed-address': '0.0.0.0/0', 'persistent-keepalive': '25s'
+            });
+        }
+        if (!tables.some(table => table.name === iface)) {
+            await apiFetch('/routing/table', 'PUT', { name: iface, fib: 'yes' });
+        }
+        await ensurePeerDataPath(iface);
+        const created = (await apiList('/interface/wireguard?.proplist=.id,name')).find(row => row.name === iface);
+        await apiFetch('/interface/wireguard/' + assertId(created['.id']), 'PATCH', { disabled: 'no' });
+    }
+
+    async function removeCatalogRelay(iface) {
+        const name = iface.name;
+        const targets = [
+            ['/ip/firewall/mangle', 'new-routing-mark', row => row['new-routing-mark'] === name],
+            ['/ip/firewall/filter', 'src-address-list', row => row['src-address-list'] === name],
+            ['/ip/firewall/nat', 'out-interface', row => row['out-interface'] === name],
+            ['/routing/rule', 'table,routing-mark', row => row.table === name || row['routing-mark'] === name],
+            ['/ip/route', 'routing-table,dynamic', row => row['routing-table'] === name && !isTrue(row.dynamic)],
+            ['/routing/table', 'name', row => row.name === name],
+            ['/ip/firewall/address-list', 'list,dynamic', row => row.list === name && !isTrue(row.dynamic)],
+            ['/interface/wireguard/peers', 'interface', row => row.interface === name],
+            ['/ip/address', 'interface,dynamic', row => row.interface === name && !isTrue(row.dynamic)]
+        ];
+        const records = await Promise.all(targets.map(([path, fields]) => apiList(path + '?.proplist=.id,' + fields)));
+        for (const [index, [path, , matches]] of targets.entries()) {
+            for (const row of records[index].filter(matches)) await deleteById(path, row['.id']);
+        }
+        await deleteById('/interface/wireguard', iface['.id']);
+    }
+
+    relayManagement.addEventListener('toggle', () => {
+        if (!relayManagement.open) return;
+        void runRelayAction(async () => {
+            const [settings, catalog] = await Promise.all([localDashboard('wireguard'), localDashboard('relays')]);
+            showRelaySettings(settings);
+            relayCatalog = catalog.length ? catalog : await localDashboard('relays', {});
+            await loadInstalledRelays();
+        });
+    });
+    document.getElementById('relaySettings').addEventListener('submit', event => {
+        event.preventDefault();
+        void runRelayAction(async () => showRelaySettings(await localDashboard('wireguard', {
+            key: relayKeyInput.value, address: relayAddressInput.value
+        })));
+    });
+    document.getElementById('relayCatalogSync').addEventListener('click', () => {
+        void runRelayAction(async () => { relayCatalog = await localDashboard('relays', {}); });
+    });
+    document.getElementById('relayRouterSync').addEventListener('click', () => void runRelayAction(loadInstalledRelays));
+    document.getElementById('relayCatalogSearch').addEventListener('input', renderRelayManagement);
+
 </script>
 </body>
 </html>

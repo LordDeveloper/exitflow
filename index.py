@@ -1,3 +1,5 @@
+import json
+import dashboard_storage
 import http.server
 import socketserver
 import ssl
@@ -70,6 +72,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 else:
                     content = PROXY_INJECT_SCRIPT + content
                 self.wfile.write(content.encode("utf-8"))
+        elif self.path.startswith("/dashboard/"):
+            self.handle_dashboard("GET")
         elif self.path.startswith("/proxy/"):
             self.handle_proxy("GET")
         elif self.path.split("?", 1)[0].startswith("/fonts/"):
@@ -96,7 +100,48 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def do_POST(self): self.handle_proxy("POST")
+    def do_POST(self):
+        if self.path.startswith("/dashboard/"):
+            self.handle_dashboard("POST")
+        else:
+            self.handle_proxy("POST")
+
+    def handle_dashboard(self, method):
+        hosts = {f"127.0.0.1:{self.server.server_port}", f"localhost:{self.server.server_port}"}
+        host = self.headers.get("Host")
+        origin = self.headers.get("Origin")
+        if host not in hosts or (origin and origin != f"http://{host}"):
+            self.send_error(403)
+            return
+        try:
+            payload = {}
+            if method == "POST":
+                if self.headers.get_content_type() != "application/json" or origin != f"http://{host}":
+                    self.send_error(403)
+                    return
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 0 < length <= 8192:
+                    raise ValueError("Invalid request size")
+                payload = json.loads(self.rfile.read(length))
+                if not isinstance(payload, dict):
+                    raise ValueError("Expected a JSON object")
+            data = dashboard_storage.dispatch(self.path, method, payload)
+            status = 200
+        except LookupError:
+            self.send_error(404)
+            return
+        except (ValueError, AttributeError) as error:
+            data, status = {"error": str(error)}, 400
+        except OSError:
+            data, status = {"error": "Could not read storage or contact Mullvad."}, 502
+        body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_PUT(self): self.handle_proxy("PUT")
     def do_PATCH(self): self.handle_proxy("PATCH")
     def do_DELETE(self): self.handle_proxy("DELETE")

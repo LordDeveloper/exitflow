@@ -2887,7 +2887,7 @@
                 };
                 return rank(a) - rank(b) || a.name.localeCompare(b.name, 'en');
             });
-            document.getElementById('wgTabCount').textContent = String(wgCatalog.length);
+            document.getElementById('wgTabCount').textContent = String(wgCatalog.filter(isListedWireGuardPeer).length);
             const pathPicker = document.getElementById('pathTestPicker');
             setPickerValue(pathPicker, pickerValue(pathPicker), false);
             if (monitoring && !relayBusy && syncInstalledRelays(wgList, wgPeers)
@@ -4433,13 +4433,17 @@
         window.setTimeout(() => toast.remove(), 5000);
     }
 
+    function isListedWireGuardPeer(item) {
+        return Boolean(item.name && item.name.toLowerCase() !== 'totr');
+    }
+
     function syncInstalledRelays(rows, peers) {
         const byInterface = new Map();
         for (const peer of peers) {
             if (byInterface.has(peer.interface)) byInterface.set(peer.interface, null);
             else byInterface.set(peer.interface, peer);
         }
-        const next = new Map(rows.filter(row => row.name).map(row => [
+        const next = new Map(rows.filter(isListedWireGuardPeer).map(row => [
             row.name.startsWith('mv-wg-') ? row.name.slice(6) : row.name,
             { ...row, peer: byInterface.get(row.name) }
         ]));

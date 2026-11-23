@@ -1051,6 +1051,7 @@
     let visibleClientCount = 0;
     const peerTests = new Map();
     const LIVE_TEST_DISPLAY_MS = 60_000;
+    let lastAutomaticPing = -Infinity;
     let prevIfaceStats = new Map();
     let prevClientBytes = new Map();
     let prevTimestamp = 0;
@@ -2425,14 +2426,30 @@
         if (el.textContent !== next) el.textContent = next;
     }
 
+    function pingMilliseconds(value) {
+        const raw = String(value ?? '').trim().toLowerCase();
+        if (/^\d+(?:\.\d+)?$/.test(raw)) return Number(raw);
+        if (/^(?:\d+:)?\d+:\d+(?:\.\d+)?$/.test(raw)) return parseRosDuration(raw) * 1000;
+        if (!/^(?:\d+(?:\.\d+)?\s*(?:ms|us|µs|μs|ns|s)\s*)+$/.test(raw)) return null;
+        const units = { s: 1000, ms: 1, us: .001, 'µs': .001, 'μs': .001, ns: .000001 };
+        return [...raw.matchAll(/(\d+(?:\.\d+)?)\s*(ms|us|µs|μs|ns|s)/g)]
+            .reduce((total, [, amount, unit]) => total + Number(amount) * units[unit], 0);
+    }
+
     function summarizePing(payload) {
         const rows = asList(payload);
-        const summary = rows.slice().reverse().find((row) => row && (row['packet-loss'] != null || (row.sent != null && row.received != null && row.seq == null)));
-        const replies = rows.filter((row) => row && row.time && String(row.status || '').toLowerCase() !== 'timeout');
-        const sent = Number(summary && summary.sent != null ? summary.sent : rows.filter((row) => row && row.seq != null).length) || 0;
-        const received = Number(summary && summary.received != null ? summary.received : replies.length) || 0;
-        const avg = (summary && (summary['avg-rtt'] || summary['min-rtt'])) || (replies[0] && replies[0].time) || '';
-        return { sent: sent || received, received, avg: avg ? String(avg) : '' };
+        const summary = rows.slice().reverse().find(row => row?.sent != null && row?.received != null);
+        const samples = rows
+            .filter(row => row && !/timeout|unreachable/i.test(String(row.status || '')))
+            .map(row => pingMilliseconds(row.time ?? row.rtt))
+            .filter(value => value != null);
+        const sent = Number(summary?.sent ?? rows.filter(row => row?.seq != null).length) || 0;
+        const received = Number(summary?.received ?? samples.length) || 0;
+        const rtt = pingMilliseconds(summary?.['avg-rtt'] ?? summary?.['average-rtt'])
+            ?? (samples.length ? samples.reduce((sum, sample) => sum + sample, 0) / samples.length
+                : pingMilliseconds(summary?.['min-rtt']));
+        const avg = received && rtt != null ? `${Number(rtt.toFixed(3))} ms` : '';
+        return { sent: sent || received, received, avg };
     }
 
     function paintPeerTest(name) {
@@ -2440,7 +2457,7 @@
         const bar = document.getElementById('pathTestResult');
         const barButton = document.getElementById('pathTestBtn');
         const selectedVal = document.getElementById('pathTestPeerValue');
-        if (bar && info && selectedVal && (selectedVal.dataset.activePeer === name || selectedVal.value === name)) {
+        if (bar && info && !info.automatic && selectedVal && (selectedVal.dataset.activePeer === name || selectedVal.value === name)) {
             bar.className = 'test-result ' + (info.state === 'ok' ? 'ok' : info.state === 'fail' ? 'bad' : 'muted');
             bar.textContent = name + ' — ' + info.text;
         }
@@ -2457,7 +2474,7 @@
         return null;
     }
 
-    async function testPeerPath(name, srcAddress, customTarget, customCount) {
+    async function testPeerPath(name, srcAddress, customTarget, customCount, automatic = false) {
         if (!monitoring) {
             setStatus('اول به روتر متصل شو.', true);
             return;
@@ -2471,29 +2488,29 @@
         const target = normalizePingTarget(customTarget) || '1.1.1.1';
         const countNum = Math.min(20, Math.max(1, Number(customCount) || 3));
         const selectedVal = document.getElementById('pathTestPeerValue');
-        if (selectedVal) selectedVal.dataset.activePeer = name;
-        peerTests.set(name, { state: 'running', text: `در حال فرستادن ${countNum} بسته به ${target}…` });
+        if (selectedVal && !automatic) selectedVal.dataset.activePeer = name;
+        peerTests.set(name, { state: 'running', automatic, text: `در حال فرستادن ${countNum} بسته به ${target}…` });
         paintPeerTest(name);
         const routed = { address: target, count: String(countNum), interval: '300ms', interface: name };
         if (srcAddress) routed['src-address'] = srcAddress;
         try {
             let result;
             try {
-                result = await apiFetch('/ping', 'POST', routed, 25000);
+                result = await apiFetch('/ping', 'POST', routed, automatic ? 5000 : 25000);
             } catch (err) {
                 if (!/400|unknown/i.test(err.message)) throw err;
                 const retryPayload = { address: target, count: String(countNum), interface: name };
                 if (srcAddress) retryPayload['src-address'] = srcAddress;
-                result = await apiFetch('/ping', 'POST', retryPayload, 25000);
+                result = await apiFetch('/ping', 'POST', retryPayload, automatic ? 5000 : 25000);
             }
             const summary = summarizePing(result);
             if (summary.received > 0) {
-                peerTests.set(name, { state: 'ok', checkedAt: Date.now(), avg: summary.avg, text: `مسیر به ${target} باز است · ${summary.received} از ${summary.sent} جواب` + (summary.avg ? ' · ' + summary.avg : '') });
+                peerTests.set(name, { state: 'ok', automatic, checkedAt: Date.now(), avg: summary.avg, text: `مسیر به ${target} باز است · ${summary.received} از ${summary.sent} جواب` + (summary.avg ? ' · ' + summary.avg : '') });
             } else {
-                peerTests.set(name, { state: 'fail', checkedAt: Date.now(), text: `پینگ ${target} از این تونل پاسخی نگرفت` });
+                peerTests.set(name, { state: 'fail', automatic, checkedAt: Date.now(), text: `پینگ ${target} از این تونل پاسخی نگرفت` });
             }
         } catch (err) {
-            peerTests.set(name, { state: 'fail', checkedAt: Date.now(), text: err.message });
+            peerTests.set(name, { state: 'fail', automatic, checkedAt: Date.now(), text: err.message });
         }
         paintPeerTest(name);
     }
@@ -4732,11 +4749,32 @@
             : { state: 'problem', text: 'آفلاین' };
     }
 
+    function scheduleVisiblePeerPing(cards, models, now) {
+        if (!monitoring || !isLive || document.hidden || busy || relayBusy || now - lastAutomaticPing < 2000
+            || [...peerTests.values()].some(test => test.state === 'running')) return;
+        let candidate = null;
+        let oldest = Infinity;
+        for (const card of cards) {
+            const name = card.dataset.relayInterface;
+            const model = models.get(name);
+            if (!model || model.disabled) continue;
+            const checkedAt = peerTests.get(name)?.checkedAt || 0;
+            if (now - checkedAt < LIVE_TEST_DISPLAY_MS || checkedAt >= oldest) continue;
+            candidate = name;
+            oldest = checkedAt;
+        }
+        if (candidate) {
+            lastAutomaticPing = now;
+            void testPeerPath(candidate, undefined, undefined, 1, true);
+        }
+    }
+
     function updateRelayCardStats() {
         if (document.getElementById('tabWireguard').hidden) return;
         const models = new Map(wgCatalog.map(model => [model.name, model]));
         const now = Date.now();
-        for (const card of relayManagement.querySelectorAll('[data-relay-interface]')) {
+        const cards = relayManagement.querySelectorAll('[data-relay-interface]');
+        for (const card of cards) {
             const name = card.dataset.relayInterface;
             const model = models.get(name);
             const test = peerTests.get(name);
@@ -4750,7 +4788,8 @@
             const metrics = {
                 health: model?.health.ageText || model?.health.text || '—',
                 clients: model ? String(model.clients.length) : '—',
-                latency: test?.avg || '—',
+                latency: model?.disabled ? 'خاموش' : test?.state === 'running' ? 'در حال تست…'
+                    : test?.avg || (test?.state === 'fail' ? 'بی‌پاسخ' : 'در صف تست'),
                 rxSpeed: model ? formatSpeed(model.stats.rxSpeed) : '—',
                 txSpeed: model ? formatSpeed(model.stats.txSpeed) : '—',
                 rx: model ? formatBytes(model.stats.rx) : '',
@@ -4765,6 +4804,7 @@
                 : test?.state === 'running' ? test.text : '';
             setText(card.querySelector('[data-relay-result]'), result);
         }
+        scheduleVisiblePeerPing(cards, models, now);
     }
 
     function mutateRelay(action) {

@@ -657,6 +657,8 @@
         .relay-toasts { position: fixed; top: 16px; right: 16px; z-index: 150; display: grid; gap: 8px; width: min(340px, calc(100vw - 32px)); pointer-events: none; }
         .relay-toast { display: grid; gap: 5px; padding: 11px 14px; border: 1px solid #33795b; border-inline-start: 4px solid #50cf8c; border-radius: 10px; background: #142a24; color: #e1f8eb; box-shadow: 0 8px 24px #02080c88; overflow-wrap: anywhere; }
         .relay-toast span { color: #afd2c1; font-size: 12px; }
+        .relay-scheduler-status { padding: 3px 8px; border-radius: 999px; color: #c4d0e0; background: #2b3a4f; white-space: nowrap; }
+        .relay-scheduler-status[data-enabled="true"] { color: #c7fbe0; background: #216645; }
     </style>
 </head>
 <body>
@@ -794,6 +796,7 @@
                         <input type="checkbox" id="autoRelayFailover" disabled>
                         <span class="switch-ui" aria-hidden="true"></span>
                         <span>تعویض خودکار روی CHR</span>
+                        <span id="relaySchedulerStatus" class="relay-scheduler-status" role="status">روتر متصل نیست</span>
                     </label>
                     <span id="relayCatalogStatus" role="status"></span>
                     <span id="relayManagementStatus" role="status"></span>
@@ -3056,8 +3059,8 @@
             void loadRouterHealthSection();
             if (!document.getElementById('tabWireguard').hidden) {
                 void runRelayAction(loadInstalledRelays);
-                void loadRelayScheduler().catch(error => { relayStatus.textContent = error.message; });
             }
+            void loadRelayScheduler().catch(error => { relayStatus.textContent = error.message; });
 
             const clock = document.getElementById('lastUpdateText');
             if (clock) clock.textContent = 'آخرین آپدیت: ' + new Date(now).toLocaleTimeString('fa-IR');
@@ -5070,32 +5073,66 @@
     });
     document.getElementById('relayInstallFilter').addEventListener('change', resetRelayPage);
     const failoverToggle = document.getElementById('autoRelayFailover');
+    const failoverBadge = document.getElementById('relaySchedulerStatus');
+    let relaySchedulerTask = null;
+    let relaySchedulerRequest = 0;
+    let relaySchedulerSaving = false;
+
+    function paintRelayScheduler(fallback) {
+        const enabled = Boolean(relaySchedulerTask && !isTrue(relaySchedulerTask.disabled));
+        failoverToggle.checked = enabled;
+        failoverBadge.dataset.enabled = String(enabled);
+        setText(failoverBadge, relaySchedulerTask ? (enabled ? 'فعال' : 'غیرفعال') : fallback);
+    }
 
     async function loadRelayScheduler() {
+        if (monitoring && relaySchedulerSaving) return;
+        const request = ++relaySchedulerRequest;
         failoverToggle.disabled = true;
-        failoverToggle.checked = false;
-        if (!monitoring) return;
-        const rows = await apiList('/system/scheduler?.proplist=.id,name,disabled');
-        const task = rows.find(row => row.name === 'exitflow-relay-failover');
-        if (!monitoring) return;
-        failoverToggle.disabled = !task;
-        failoverToggle.checked = Boolean(task && !isTrue(task.disabled));
-        failoverToggle.title = task ? 'اجرا روی Scheduler روتر' : 'ابتدا routeros/relay-failover.rsc را روی CHR ایمپورت کنید';
+        if (!monitoring) {
+            relaySchedulerTask = null;
+            relaySchedulerSaving = false;
+            paintRelayScheduler('روتر متصل نیست');
+            return;
+        }
+        paintRelayScheduler('در حال بررسی…');
+        try {
+            const rows = await apiList('/system/scheduler?.proplist=.id,name,disabled');
+            if (request !== relaySchedulerRequest || !monitoring) return;
+            relaySchedulerTask = rows.find(row => row.name === 'exitflow-relay-failover') || null;
+            failoverToggle.title = relaySchedulerTask ? 'اجرا روی Scheduler روتر'
+                : 'ابتدا routeros/relay-failover.rsc را روی CHR ایمپورت کنید';
+            paintRelayScheduler('نصب نشده');
+        } catch (error) {
+            if (request !== relaySchedulerRequest) return;
+            paintRelayScheduler('وضعیت نامشخص');
+            throw error;
+        } finally {
+            if (request === relaySchedulerRequest) failoverToggle.disabled = !relaySchedulerTask;
+        }
     }
 
     failoverToggle.addEventListener('change', async () => {
+        const task = relaySchedulerTask;
+        if (!task || !monitoring || relaySchedulerSaving) return;
         const enabled = failoverToggle.checked;
+        const request = ++relaySchedulerRequest;
+        relaySchedulerSaving = true;
         failoverToggle.disabled = true;
+        paintRelayScheduler('در حال ذخیره…');
         try {
-            const rows = await apiList('/system/scheduler?.proplist=.id,name,disabled');
-            const task = rows.find(row => row.name === 'exitflow-relay-failover');
-            if (!task) throw new Error('Scheduler تعویض رله روی CHR نصب نشده است');
             await apiFetch('/system/scheduler/' + assertId(task['.id']), 'PATCH', { disabled: enabled ? 'no' : 'yes' });
+            if (request !== relaySchedulerRequest || !monitoring) return;
+            relaySchedulerTask = { ...task, disabled: !enabled };
+            paintRelayScheduler('');
             relayStatus.textContent = enabled ? 'تعویض خودکار روی CHR فعال شد' : 'تعویض خودکار روی CHR متوقف شد';
         } catch (error) {
-            relayStatus.textContent = error.message;
+            if (request === relaySchedulerRequest) relayStatus.textContent = error.message;
         } finally {
-            await loadRelayScheduler().catch(error => { relayStatus.textContent = error.message; });
+            if (request === relaySchedulerRequest) {
+                relaySchedulerSaving = false;
+                await loadRelayScheduler().catch(error => { relayStatus.textContent = error.message; });
+            }
         }
     });
     document.getElementById('hideDisabledRelays').addEventListener('change', resetRelayPage);

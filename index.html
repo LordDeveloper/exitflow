@@ -1070,6 +1070,7 @@
     let visibleClientCount = 0;
     const peerTests = new Map();
     let relayPingOrderDirty = false;
+    let relayPingPaintPending = false;
     const LIVE_TEST_DISPLAY_MS = 60_000;
     const PEER_PING_REFRESH_MS = 15_000;
     const PEER_PING_TICK_MS = 1500;
@@ -2471,11 +2472,16 @@
             bar.className = 'test-result ' + (info.state === 'ok' ? 'ok' : info.state === 'fail' ? 'bad' : 'muted');
             bar.textContent = name + ' — ' + info.text;
         }
-        let running = false;
-        peerTests.forEach((item) => { if (item.state === 'running') running = true; });
-        if (barButton) barButton.disabled = running;
+        const selectedTest = peerTests.get(selectedVal?.value);
+        if (barButton) barButton.disabled = selectedTest?.state === 'running' && !selectedTest.automatic;
         if (info && info.state !== 'running' && info.avg !== info.previousAvg) relayPingOrderDirty = true;
-        updateRelayCardStats();
+        if (!relayPingPaintPending) {
+            relayPingPaintPending = true;
+            requestAnimationFrame(() => {
+                relayPingPaintPending = false;
+                updateRelayCardStats();
+            });
+        }
     }
 
     function normalizePingTarget(raw) {
@@ -2490,11 +2496,9 @@
             setStatus('اول به روتر متصل شو.', true);
             return;
         }
-        for (const item of peerTests.values()) {
-            if (item.state === 'running') {
-                setStatus('یک تست مسیر هنوز تمام نشده.', true);
-                return;
-            }
+        if (peerTests.get(name)?.state === 'running') {
+            if (!automatic) setStatus('تست پینگ همین نود هنوز تمام نشده.', true);
+            return;
         }
         const target = normalizePingTarget(customTarget) || '1.1.1.1';
         const countNum = Math.min(20, Math.max(1, Number(customCount) || 3));
@@ -4625,7 +4629,9 @@
     }
 
     function compareRelayCities(a, b) {
-        return (a.ping - b.ping)
+        const aPing = Number.isFinite(a.ping) ? a.ping : -Infinity;
+        const bPing = Number.isFinite(b.ping) ? b.ping : -Infinity;
+        return (bPing - aPing)
             || Number(Boolean(b.installed.length)) - Number(Boolean(a.installed.length))
             || a.country.localeCompare(b.country) || a.city.localeCompare(b.city);
     }
@@ -4826,22 +4832,18 @@
 
     function scheduleVisiblePeerPing() {
         if (!monitoring || document.hidden || document.getElementById('tabWireguard').hidden
-            || busy || relayBusy || [...peerTests.values()].some(test => test.state === 'running')) return;
+            || busy || relayBusy) return;
         const now = Date.now();
         const interfaces = new Map([...(installedRelays?.values() || [])].map(iface => [iface.name, iface]));
-        let candidate = null;
-        let oldest = Infinity;
         for (const card of relayManagement.querySelectorAll('[data-relay-interface]')) {
             if (!card.getClientRects().length) continue;
             const name = card.dataset.relayInterface;
             const iface = interfaces.get(name);
             if (!iface || isTrue(iface.disabled)) continue;
-            const checkedAt = peerTests.get(name)?.checkedAt ?? -Infinity;
-            if (now - checkedAt < PEER_PING_REFRESH_MS || checkedAt >= oldest) continue;
-            candidate = name;
-            oldest = checkedAt;
+            const test = peerTests.get(name);
+            if (test?.state === 'running' || now - (test?.checkedAt ?? -Infinity) < PEER_PING_REFRESH_MS) continue;
+            void testPeerPath(name, undefined, undefined, 1, true);
         }
-        if (candidate) void testPeerPath(candidate, undefined, undefined, 1, true);
     }
 
     function updateRelayCardStats() {

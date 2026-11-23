@@ -1074,7 +1074,8 @@
     let relayPingPaintPending = false;
     const LIVE_TEST_DISPLAY_MS = 60_000;
     const PEER_PING_REFRESH_MS = 15_000;
-    const PEER_PING_TICK_MS = 1500;
+    const PEER_PING_BATCH_SIZE = 4;
+    let peerPingBatchRunning = false;
     let peerPingTimer = null;
 
     let prevIfaceStats = new Map();
@@ -3176,7 +3177,7 @@
     function startLiveTimer() {
         stopLiveTimer();
         liveTimer = setInterval(() => { poll(); }, POLL_MS);
-        peerPingTimer = setInterval(scheduleVisiblePeerPing, PEER_PING_TICK_MS);
+        peerPingTimer = setInterval(scheduleVisiblePeerPing, PEER_PING_REFRESH_MS);
     }
 
     function stopLiveTimer() {
@@ -4934,13 +4935,11 @@
             : { state: 'problem', text: 'آفلاین' };
     }
 
-    function scheduleVisiblePeerPing() {
+    async function scheduleVisiblePeerPing() {
         if (!monitoring || document.hidden || document.getElementById('tabWireguard').hidden
-            || busy || relayBusy) return;
-        const now = Date.now();
+            || busy || relayBusy || peerPingBatchRunning) return;
         const interfaces = new Map([...(installedRelays?.values() || [])].map(iface => [iface.name, iface]));
-        let nextPeer;
-        let oldest = Infinity;
+        const candidates = [];
         for (const card of relayManagement.querySelectorAll('[data-relay-interface]')) {
             if (!card.getClientRects().length) continue;
             const name = card.dataset.relayInterface;
@@ -4948,13 +4947,26 @@
             const target = relayPingAddress(iface);
             if (!target || isTrue(iface.disabled) || peerPingTargetBusy(target)) continue;
             const test = peerTests.get(name);
-            const checkedAt = test?.checkedAt ?? -Infinity;
-            if (test?.state === 'running' || peerTrafficTests.get(name)?.running
-                || now - checkedAt < PEER_PING_REFRESH_MS || checkedAt >= oldest) continue;
-            nextPeer = name;
-            oldest = checkedAt;
+            if (test?.state === 'running' || peerTrafficTests.get(name)?.running) continue;
+            candidates.push({ name, target, checkedAt: test?.checkedAt ?? 0 });
         }
-        if (nextPeer) void testPeerPath(nextPeer, undefined, undefined, undefined, true);
+        candidates.sort((a, b) => a.checkedAt - b.checkedAt);
+        const targets = new Set();
+        const batch = [];
+        for (const { name, target } of candidates) {
+            if (targets.has(target)) continue;
+            targets.add(target);
+            batch.push(name);
+            if (batch.length === PEER_PING_BATCH_SIZE) break;
+        }
+        if (!batch.length) return;
+
+        peerPingBatchRunning = true;
+        try {
+            await Promise.allSettled(batch.map(name => testPeerPath(name, undefined, undefined, undefined, true)));
+        } finally {
+            peerPingBatchRunning = false;
+        }
     }
 
     function updateRelayCardStats() {

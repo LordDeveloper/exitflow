@@ -654,9 +654,13 @@
         .relay-country-options button { min-height: 36px; border-radius: 6px; }
         .relay-country-options button:hover { background: #263e59; }
         .relay-toolbar > * { min-width: 0; }
+        .relay-toasts { position: fixed; top: 16px; right: 16px; z-index: 150; display: grid; gap: 8px; width: min(340px, calc(100vw - 32px)); pointer-events: none; }
+        .relay-toast { display: grid; gap: 5px; padding: 11px 14px; border: 1px solid #33795b; border-inline-start: 4px solid #50cf8c; border-radius: 10px; background: #142a24; color: #e1f8eb; box-shadow: 0 8px 24px #02080c88; overflow-wrap: anywhere; }
+        .relay-toast span { color: #afd2c1; font-size: 12px; }
     </style>
 </head>
 <body>
+<div id="relayToasts" class="relay-toasts" role="status" aria-live="polite" aria-atomic="false"></div>
 <div class="container">
     <header class="page-head">
         <div>
@@ -4408,6 +4412,24 @@
         if (monitoring) syncInstalledRelays(rows, peers);
     }
 
+    function notifyRelayChange(node, peer) {
+        const end = peer['endpoint-address'];
+        const relay = relayCatalog.find(item => item.ip === end && item.publicKey === peer['public-key']);
+        const region = document.getElementById('relayToasts');
+        const toast = document.createElement('div');
+        toast.className = 'relay-toast';
+        toast.dir = 'rtl';
+        const title = document.createElement('strong');
+        title.textContent = `رلهٔ نود ${node} تغییر کرد`;
+        const detail = document.createElement('span');
+        detail.dir = 'ltr';
+        detail.textContent = relay ? `${relay.name} · ${end}` : end;
+        toast.append(title, detail);
+        if (region.childElementCount >= 4) region.firstElementChild.remove();
+        region.append(toast);
+        window.setTimeout(() => toast.remove(), 5000);
+    }
+
     function syncInstalledRelays(rows, peers) {
         const byInterface = new Map();
         for (const peer of peers) {
@@ -4429,8 +4451,12 @@
         if (changed && installedRelays) {
             for (const [key, old] of installedRelays) {
                 const item = next.get(key);
-                if ((!item || old['.id'] !== item['.id'] || old.peer?.['endpoint-address'] !== item.peer?.['endpoint-address'])
-                    && peerTests.get(old.name)?.state !== 'running') {
+                const sameNode = item && old['.id'] === item['.id'];
+                const relayChanged = sameNode && old.peer?.['endpoint-address'] && item.peer?.['endpoint-address']
+                    && (old.peer['endpoint-address'] !== item.peer['endpoint-address']
+                        || old.peer['public-key'] !== item.peer['public-key']);
+                if (relayChanged && item.name.startsWith('mv-wg-')) notifyRelayChange(item.name, item.peer);
+                if ((!sameNode || relayChanged) && peerTests.get(old.name)?.state !== 'running') {
                     peerTests.delete(old.name);
                 }
             }

@@ -780,6 +780,11 @@
                     <button type="button" id="relayRouterSync">تازه‌سازی وضعیت روتر</button>
                 </div>
                 <div class="relay-feedback">
+                    <label class="switch" for="hideDisabledRelays">
+                        <input type="checkbox" id="hideDisabledRelays">
+                        <span class="switch-ui" aria-hidden="true"></span>
+                        <span>مخفی‌کردن نودهای خاموش</span>
+                    </label>
                     <span id="relayCatalogStatus" role="status"></span>
                     <span id="relayManagementStatus" role="status"></span>
                 </div>
@@ -4574,6 +4579,7 @@
     function renderRelayManagement() {
         const query = document.getElementById('relayCatalogSearch').value.trim().toLowerCase();
         const filter = document.getElementById('relayInstallFilter').value;
+        const hideDisabled = document.getElementById('hideDisabledRelays').checked;
 
         const cities = new Map();
         const byName = new Map(relayCatalog.map(relay => [relay.name, relay]));
@@ -4591,6 +4597,7 @@
         })).filter(city => {
             if (relayCountry && city.country !== relayCountry) return false;
             if (relayCity && city.key !== relayCity) return false;
+            if (hideDisabled && city.installed.length && city.installed.every(iface => isTrue(iface.disabled))) return false;
             if (filter === 'installed' && !city.installed.length) return false;
             if (filter === 'available' && (!installedRelays || city.installed.length)) return false;
             return [city.city, city.country, ...city.relays.flatMap(relay => [relay.name, relay.ip])]
@@ -4633,7 +4640,8 @@
             card.dataset.installed = String(city.installed.length > 0);
             header.append(heading);
             card.append(header);
-            const [installed, ...extra] = city.installed;
+            const [installed, ...extra] = hideDisabled
+                ? city.installed.filter(iface => !isTrue(iface.disabled)) : city.installed;
             card.append(buildCityPeer(city.relays, installed));
             if (extra.length) {
                 const legacy = document.createElement('details');
@@ -5026,6 +5034,7 @@
         document.getElementById('relayCountryLabel').focus();
     });
     document.getElementById('relayInstallFilter').addEventListener('change', resetRelayPage);
+    document.getElementById('hideDisabledRelays').addEventListener('change', resetRelayPage);
     document.getElementById('relayRouterSync').addEventListener('click', () => void runRelayAction(loadInstalledRelays));
     document.getElementById('relayCatalogSearch').addEventListener('input', resetRelayPage);
     document.getElementById('relayPagePrev').addEventListener('click', () => {

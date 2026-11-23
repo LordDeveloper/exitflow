@@ -2511,18 +2511,28 @@
         return { rx, tx };
     }
 
+    function peerPingTargetBusy(target) {
+        return [...peerTests.values()].some(test => test.state === 'running' && test.target === target)
+            || [...peerTrafficTests.values()].some(test => test.running && test.target === target);
+    }
+
     async function testPeerTraffic(name) {
         if (!monitoring || peerTrafficTests.get(name)?.running) return;
         if (peerTests.get(name)?.state === 'running') {
             setStatus('تست پینگ این نود هنوز تمام نشده.', true);
             return;
         }
-        peerTrafficTests.set(name, { running: true, text: 'تست ترافیک: در حال ارسال ۵ بستهٔ ۱۲۰۰ بایتی…' });
+        const target = '1.1.1.1';
+        if (peerPingTargetBusy(target)) {
+            setStatus('تست دیگری به همین مقصد در حال اجراست. بعد از پایان آن دوباره امتحان کن.', true);
+            return;
+        }
+        peerTrafficTests.set(name, { running: true, target, text: 'تست ترافیک: در حال ارسال ۵ بستهٔ ۱۲۰۰ بایتی…' });
         updateRelayCardStats();
         try {
             const before = await readPeerTraffic(name);
-            const result = await requestPeerPing({
-                address: '1.1.1.1', interface: name, 'routing-table': name, count: '5', size: '1200'
+            const result = await apiFetch('/ping', 'POST', {
+                address: target, interface: name, count: '5', size: '1200'
             }, 15000);
             const after = await readPeerTraffic(name);
             const reply = summarizePing(result);
@@ -2547,19 +2557,6 @@
         return null;
     }
 
-    async function requestPeerPing(payload, timeout) {
-        const options = { ...payload, interval: '300ms' };
-        for (;;) {
-            try {
-                return await apiFetch('/ping', 'POST', options, timeout);
-            } catch (error) {
-                const parameter = error.message.match(/(?:unknown|unsupported) parameter\s+["']?(routing-table|interval)\b/i)?.[1]?.toLowerCase();
-                if (!parameter || !Object.hasOwn(options, parameter)) throw error;
-                delete options[parameter];
-            }
-        }
-    }
-
     async function testPeerPath(name, srcAddress, customTarget, customCount, automatic = false) {
         if (!monitoring) {
             setStatus('اول به روتر متصل شو.', true);
@@ -2570,18 +2567,21 @@
             return;
         }
         const target = normalizePingTarget(customTarget) || '1.1.1.1';
+        if (peerPingTargetBusy(target)) {
+            if (!automatic) setStatus('تست دیگری به همین مقصد در حال اجراست. بعد از پایان آن دوباره امتحان کن.', true);
+            return;
+        }
         const countNum = Math.min(20, Math.max(1, Number(customCount) || 3));
         const selectedVal = document.getElementById('pathTestPeerValue');
         if (selectedVal && !automatic) selectedVal.dataset.activePeer = name;
         const previous = peerTests.get(name);
         const previousAvg = previous?.avg;
-        peerTests.set(name, { state: 'running', automatic, avg: previousAvg, checkedAt: previous?.checkedAt, text: `در حال فرستادن ${countNum} بسته به ${target}…` });
+        peerTests.set(name, { state: 'running', target, automatic, avg: previousAvg, checkedAt: previous?.checkedAt, text: `در حال فرستادن ${countNum} بسته به ${target}…` });
         paintPeerTest(name);
         const routed = { address: target, count: String(countNum), interface: name };
-        if (name.startsWith('mv-wg-')) routed['routing-table'] = name;
         if (srcAddress) routed['src-address'] = srcAddress;
         try {
-            const result = await requestPeerPing(routed, automatic ? 5000 : 25000);
+            const result = await apiFetch('/ping', 'POST', routed, automatic ? 12000 : 25000);
             const summary = summarizePing(result);
             if (summary.received > 0) {
                 peerTests.set(name, { state: 'ok', automatic, previousAvg, checkedAt: Date.now(), avg: summary.avg, text: `مسیر به ${target} باز است · ${summary.received} از ${summary.sent} جواب` + (summary.avg ? ' · ' + summary.avg : '') });
@@ -4924,18 +4924,24 @@
 
     function scheduleVisiblePeerPing() {
         if (!monitoring || document.hidden || document.getElementById('tabWireguard').hidden
-            || busy || relayBusy) return;
+            || busy || relayBusy || peerPingTargetBusy('1.1.1.1')) return;
         const now = Date.now();
         const interfaces = new Map([...(installedRelays?.values() || [])].map(iface => [iface.name, iface]));
+        let nextPeer;
+        let oldest = Infinity;
         for (const card of relayManagement.querySelectorAll('[data-relay-interface]')) {
             if (!card.getClientRects().length) continue;
             const name = card.dataset.relayInterface;
             const iface = interfaces.get(name);
             if (!iface || isTrue(iface.disabled)) continue;
             const test = peerTests.get(name);
-            if (test?.state === 'running' || peerTrafficTests.get(name)?.running || now - (test?.checkedAt ?? -Infinity) < PEER_PING_REFRESH_MS) continue;
-            void testPeerPath(name, undefined, undefined, 1, true);
+            const checkedAt = test?.checkedAt ?? -Infinity;
+            if (test?.state === 'running' || peerTrafficTests.get(name)?.running
+                || now - checkedAt < PEER_PING_REFRESH_MS || checkedAt >= oldest) continue;
+            nextPeer = name;
+            oldest = checkedAt;
         }
+        if (nextPeer) void testPeerPath(nextPeer, undefined, undefined, 5, true);
     }
 
     function updateRelayCardStats() {

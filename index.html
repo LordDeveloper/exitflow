@@ -589,6 +589,17 @@
         .relay-actions:empty { display: none; }
         .relay-actions .relay-icon { display: inline-grid; place-items: center; width: 34px; height: 34px; padding: 0; }
         .relay-icon svg { width: 17px; height: 17px; }
+        .relay-icon[aria-busy="true"] { cursor: wait; opacity: 1; }
+        .relay-icon[aria-busy="true"] svg { display: none; }
+        .relay-icon[aria-busy="true"]::after {
+            content: ''; width: 15px; height: 15px; box-sizing: border-box;
+            border: 2px solid currentColor; border-inline-end-color: transparent;
+            border-radius: 50%; animation: relay-spin 0.75s linear infinite;
+        }
+        @keyframes relay-spin { to { transform: rotate(360deg); } }
+        @media (prefers-reduced-motion: reduce) {
+            .relay-icon[aria-busy="true"]::after { animation-duration: 2s; }
+        }
         .relay-edit[hidden] { display: none; }
         .relay-pagination { justify-content: center; }
         @media (max-width: 680px) {
@@ -3504,7 +3515,7 @@
         syncDiagTargetWithMode();
         document.getElementById('diagFixBtn').hidden = true;
         modal.hidden = false;
-        runDiagnoseAndMtr();
+        return runDiagnoseAndMtr();
     }
 
     function closeDiagnoseModal() {
@@ -3863,7 +3874,7 @@
         document.getElementById('clientPingBody').innerHTML = '';
         document.getElementById('clientPingSummary').textContent = 'حالت تست را انتخاب کرده و روی «شروع پینگ» کلیک کنید.';
         document.getElementById('clientPingModal').hidden = false;
-        runClientPing();
+        return runClientPing();
     }
 
     function closeClientPingModal() {
@@ -3979,9 +3990,13 @@
         const row = button.closest('.client-card');
         const ip = row && row.dataset.ip;
         if (!ip) return;
-        if (button.dataset.action === 'ping-client') openClientPingModal(ip, row.dataset.host || ip);
-        else if (button.dataset.action === 'flush') flushOnly(ip);
-        else if (button.dataset.action === 'disconnect') disconnectClient(ip);
+        const actions = {
+            'ping-client': () => openClientPingModal(ip, row.dataset.host || ip),
+            flush: () => flushOnly(ip),
+            disconnect: () => disconnectClient(ip)
+        };
+        const action = actions[button.dataset.action];
+        if (action) void runIconAction(button, action);
     });
     document.getElementById('clientCards').addEventListener('input', (event) => {
         if (!event.target.classList.contains('peer-picker-search')) return;
@@ -4590,7 +4605,27 @@
         return button;
     }
 
-    function relayIcon(label, icon, style, action, disabled = false) {
+    const pendingIconActions = new Set();
+
+    async function runIconAction(button, action) {
+        const key = button.dataset.loadingKey;
+        if (button.hasAttribute('aria-busy') || (key && pendingIconActions.has(key))) return;
+        if (key) pendingIconActions.add(key);
+        button.setAttribute('aria-busy', 'true');
+        try {
+            await action();
+        } catch (error) {
+            setStatus(error.message, true);
+        } finally {
+            button.removeAttribute('aria-busy');
+            if (key) {
+                pendingIconActions.delete(key);
+                document.querySelector(`[data-loading-key="${CSS.escape(key)}"]`)?.removeAttribute('aria-busy');
+            }
+        }
+    }
+
+    function relayIcon(label, icon, style, action, disabled = false, scope = '') {
         const paths = {
             power: 'M12 2v10 M6 5a9 9 0 1 0 12 0',
             ping: 'M2 12h5l3-7 4 14 3-7h5',
@@ -4601,7 +4636,15 @@
             traffic: 'M4 8h16 M15 3l5 5-5 5 M20 16H4 M9 11l-5 5 5 5',
             install: 'M12 3v12 M7 10l5 5 5-5 M4 16v5h16v-5'
         };
-        const button = relayButton(label, style + ' relay-icon', action, disabled);
+        const button = relayButton(label, style + ' relay-icon', action && (() => {
+            if (scope) void runIconAction(button, action);
+            else action();
+        }), disabled);
+        if (scope) {
+            const key = scope + ':' + icon;
+            button.dataset.loadingKey = key;
+            if (pendingIconActions.has(key)) button.setAttribute('aria-busy', 'true');
+        }
         button.title = label;
         button.setAttribute('aria-label', label);
         button.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${paths[icon]}"/></svg>`;
@@ -4854,21 +4897,17 @@
             actions.append(
                 relayIcon(disabled ? 'فعال' : 'غیرفعال', 'power', 'info', () => mutateRelay(async () => {
                     await setPeerDisabledState(iface.name, !disabled);
-                }), relayBusy),
-                relayIcon('تست لحظه‌ای ارتباط', 'ping', 'info', () => {
-                    void testPeerPath(iface.name);
-                }, disabled || relayBusy),
-                relayIcon('تست ترافیک', 'traffic', 'info', () => {
-                    void testPeerTraffic(iface.name);
-                }, disabled || relayBusy),
-                relayIcon('MTR و عیب‌یابی', 'trace', 'info', () => openDiagnoseModal(iface.name), relayBusy),
-                relayIcon('راه‌اندازی مجدد', 'restart', 'info', () => mutateRelay(() => restartPeerInterface(iface.name)), relayBusy || Boolean(disabled))
+                }), relayBusy, iface.name),
+                relayIcon('تست لحظه‌ای ارتباط', 'ping', 'info', () => testPeerPath(iface.name), disabled || relayBusy, iface.name),
+                relayIcon('تست ترافیک', 'traffic', 'info', () => testPeerTraffic(iface.name), disabled || relayBusy, iface.name),
+                relayIcon('MTR و عیب‌یابی', 'trace', 'info', () => openDiagnoseModal(iface.name), relayBusy, iface.name),
+                relayIcon('راه‌اندازی مجدد', 'restart', 'info', () => mutateRelay(() => restartPeerInterface(iface.name)), relayBusy || Boolean(disabled), iface.name)
             );
             if (iface.name.startsWith('mv-wg-')) actions.append(relayIcon('حذف', 'remove', 'danger', () => {
                     if (window.confirm('با حذف این رله، تخصیص کلاینت‌های آن پاک می‌شود. ادامه می‌دهید؟')) {
-                        mutateRelay(() => removeCatalogRelay(iface));
+                        return mutateRelay(() => removeCatalogRelay(iface));
                     }
-                }, relayBusy));
+                }, relayBusy, iface.name));
         }
         if (installedRelays && choices.length && (!iface || peer)) {
             const edit = document.createElement('div');
@@ -4886,7 +4925,7 @@
                 if (!value || value === selected) return;
                 selected = value;
                 if (iface) {
-                    mutateRelay(() => changeCityRelay(iface, value));
+                    void runIconAction(editButton, () => mutateRelay(() => changeCityRelay(iface, value)));
                 } else {
                     title.textContent = value;
                     endpoint.textContent = choices.find(relay => relay.name === value).ip;
@@ -4899,13 +4938,12 @@
                 editButton.setAttribute('aria-expanded', String(!edit.hidden));
                 picker.open = !edit.hidden;
                 if (!edit.hidden) picker.querySelector('summary').focus();
-            }, relayBusy);
+            }, relayBusy, iface?.name);
             editButton.setAttribute('aria-expanded', 'false');
             actions.append(editButton);
             if (!iface) {
-                actions.append(relayIcon('نصب رلهٔ انتخاب‌شده', 'install', 'success', () => {
-                    mutateRelay(() => installCatalogRelay(selected));
-                }, relayBusy));
+                actions.append(relayIcon('نصب رلهٔ انتخاب‌شده', 'install', 'success',
+                    () => mutateRelay(() => installCatalogRelay(selected)), relayBusy, 'city:' + relayCityKey(relays[0])));
             }
         }
         card.append(actions);
@@ -4973,10 +5011,10 @@
     }
 
     function mutateRelay(action) {
-        void runRelayAction(async () => {
+        return runRelayAction(async () => {
             await action();
             await loadInstalledRelays();
-            void refreshAll().catch(error => setPollStatus(error.message));
+            await refreshAll().catch(error => setPollStatus(error.message));
         });
     }
 

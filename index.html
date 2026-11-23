@@ -551,6 +551,7 @@
         @media (min-width: 1280px) { #relayCatalogRows { grid-template-columns: repeat(4, minmax(0, 350px)); } }
         @media (min-width: 681px) and (max-width: 1000px) { .relay-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
         .relay-city { display: flex; flex-direction: column; width: 100%; max-width: 350px; border: 1px solid #2b5549; border-radius: 13px; padding: 13px; min-width: 0; background: #14251f; position: relative; isolation: isolate; }
+        .relay-city:has(.relay-edit:not([hidden]) .relay-country-picker[open]) { z-index: 6; }
         .relay-city::before { content: ''; position: absolute; z-index: -1; inset: 0 0 auto; height: 100px; border-radius: inherit; background: var(--relay-flag-image, none) center / cover; opacity: .2; filter: blur(8px); mask-image: linear-gradient(#000, transparent); pointer-events: none; }
         .relay-city[data-installed="false"] { border-color: var(--border); background: #172130; color: #c6d1e4; }
         .relay-city[data-installed="false"]::before { opacity: .12; filter: grayscale(.75) blur(8px); }

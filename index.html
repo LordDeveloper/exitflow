@@ -881,6 +881,7 @@
             <h2>انتقال DHCP به CHR</h2>
             <button type="button" id="chrDhcpRefresh">خواندن وضعیت CHR</button>
             <ul id="chrDhcpServers"></ul>
+            <label><input type="checkbox" id="chrDhcpModem"> نمایش رابط‌های متصل به مودم (خارج از لیست LAN)</label>
             <form id="chrDhcpForm" class="relay-settings">
                 <label>رابط LAN<select id="chrDhcpInterface" required></select></label>
                 <label>Gateway<input name="gateway" list="chrDhcpGateways" required dir="ltr"><datalist id="chrDhcpGateways"></datalist></label>
@@ -2832,6 +2833,7 @@
     const chrDhcpName = 'exitflow-lan';
     const chrDhcpForm = document.getElementById('chrDhcpForm');
     const chrGateway = chrDhcpForm.elements.gateway;
+    const chrDhcpModem = document.getElementById('chrDhcpModem');
     const chrDhcpInterface = document.getElementById('chrDhcpInterface');
     const chrDhcpReady = document.getElementById('chrDhcpReady');
     const chrDhcpPrepare = document.getElementById('chrDhcpPrepare');
@@ -2849,12 +2851,15 @@
         ]);
         const lan = new Set(members.filter(row => row.list.toUpperCase() === 'LAN').map(row => row.interface));
         const wan = new Set(members.filter(row => row.list.toUpperCase() === 'WAN').map(row => row.interface));
-        const eligible = new Set(interfaces.filter(row => ['ether', 'bridge', 'vlan', 'wlan', 'wifi', 'bonding'].includes(row.type)
-            && !isTrue(row.disabled) && !isTrue(row.slave) && !wan.has(row.name)
-            && (!lan.size || lan.has(row.name))).map(row => row.name));
+        const eligible = interfaces.filter(row => ['ether', 'bridge', 'vlan', 'wlan', 'wifi', 'bonding'].includes(row.type)
+            && !isTrue(row.disabled) && !isTrue(row.slave)
+            && (chrDhcpModem.checked || (!wan.has(row.name) && (!lan.size || lan.has(row.name)))));
+        const eligibleNames = new Set(eligible.map(row => row.name));
+        const staticAddresses = addresses.filter(row => !isTrue(row.dynamic) && !isTrue(row.disabled)
+            && !isTrue(row.invalid) && eligibleNames.has(row.interface) && isIpv4(ipOnly(row.address)));
         return {
-            addresses: addresses.filter(row => !isTrue(row.dynamic) && !isTrue(row.disabled)
-                && !isTrue(row.invalid) && eligible.has(row.interface) && isIpv4(ipOnly(row.address))),
+            addresses: staticAddresses,
+            needsStaticIp: eligible.filter(row => !staticAddresses.some(address => address.interface === row.name)),
             servers,
             managed: servers.find(row => row.name === chrDhcpName)
         };
@@ -2864,7 +2869,7 @@
         if (chrDhcpRefresh.disabled) return;
         const status = document.getElementById('chrDhcpStatus');
         const list = document.getElementById('chrDhcpServers');
-        chrDhcpRefresh.disabled = chrDhcpPrepare.disabled = chrDhcpEnable.disabled = chrDhcpDisable.disabled = true;
+        chrDhcpModem.disabled = chrDhcpRefresh.disabled = chrDhcpPrepare.disabled = chrDhcpEnable.disabled = chrDhcpDisable.disabled = true;
         status.textContent = 'در حال ارتباط با CHR…';
         let state;
         try {
@@ -2887,7 +2892,14 @@
                 option.textContent = row.interface + ' · ' + row.address;
                 chrDhcpInterface.append(option);
             }
-            if ([...chrDhcpInterface.options].some(option => option.value === selected)) chrDhcpInterface.value = selected;
+            if (selected && [...chrDhcpInterface.options].some(option => option.value === selected)) chrDhcpInterface.value = selected;
+            for (const row of state?.needsStaticIp || []) {
+                const option = document.createElement('option');
+                option.value = '';
+                option.disabled = true;
+                option.textContent = row.name + ' · نیاز به IPv4 ثابت';
+                chrDhcpInterface.append(option);
+            }
             for (const server of state?.servers || []) {
                 const item = document.createElement('li');
                 const mode = isTrue(server.disabled) ? 'غیرفعال' : isTrue(server.invalid) ? 'نامعتبر' : 'فعال';
@@ -2897,7 +2909,7 @@
             chrDhcpPrepare.disabled = !state || Boolean(state.managed) || !chrDhcpInterface.value;
             chrDhcpEnable.disabled = !state?.managed || !isTrue(state.managed.disabled);
             chrDhcpDisable.disabled = !state?.managed || isTrue(state.managed.disabled);
-            chrDhcpRefresh.disabled = false;
+            chrDhcpModem.disabled = chrDhcpRefresh.disabled = false;
             updateChrGateway();
         }
     }
@@ -2967,6 +2979,7 @@
     }
 
     chrDhcpRefresh.addEventListener('click', () => void runChrDhcpAction());
+    chrDhcpModem.addEventListener('change', () => void runChrDhcpAction());
     chrDhcpInterface.addEventListener('change', updateChrGateway);
     chrGateway.addEventListener('input', updateChrGateway);
     chrDhcpForm.addEventListener('submit', event => {

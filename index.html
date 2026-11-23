@@ -2485,7 +2485,7 @@
         const barButton = document.getElementById('pathTestBtn');
         const selectedVal = document.getElementById('pathTestPeerValue');
         if (bar && info && !info.automatic && selectedVal && (selectedVal.dataset.activePeer === name || selectedVal.value === name)) {
-            bar.className = 'test-result ' + (info.state === 'ok' ? 'ok' : info.state === 'fail' ? 'bad' : 'muted');
+            bar.className = 'test-result ' + (info.state === 'ok' ? 'ok' : ['fail', 'error'].includes(info.state) ? 'bad' : 'muted');
             bar.textContent = name + ' — ' + info.text;
         }
         const selectedTest = peerTests.get(selectedVal?.value);
@@ -2505,6 +2505,19 @@
         if (!val) return '1.1.1.1';
         if (/^[a-zA-Z0-9.-]+$/.test(val)) return val;
         return null;
+    }
+
+    async function requestPeerPing(payload, timeout) {
+        const options = { ...payload, interval: '300ms' };
+        for (;;) {
+            try {
+                return await apiFetch('/ping', 'POST', options, timeout);
+            } catch (error) {
+                const parameter = error.message.match(/(?:unknown|unsupported) parameter\s+["']?(routing-table|interval)\b/i)?.[1]?.toLowerCase();
+                if (!parameter || !Object.hasOwn(options, parameter)) throw error;
+                delete options[parameter];
+            }
+        }
     }
 
     async function testPeerPath(name, srcAddress, customTarget, customCount, automatic = false) {
@@ -2528,13 +2541,7 @@
         if (name.startsWith('mv-wg-')) routed['routing-table'] = name;
         if (srcAddress) routed['src-address'] = srcAddress;
         try {
-            let result;
-            try {
-                result = await apiFetch('/ping', 'POST', { ...routed, interval: '300ms' }, automatic ? 5000 : 25000);
-            } catch (err) {
-                if (!/400|unknown/i.test(err.message)) throw err;
-                result = await apiFetch('/ping', 'POST', routed, automatic ? 5000 : 25000);
-            }
+            const result = await requestPeerPing(routed, automatic ? 5000 : 25000);
             const summary = summarizePing(result);
             if (summary.received > 0) {
                 peerTests.set(name, { state: 'ok', automatic, previousAvg, checkedAt: Date.now(), avg: summary.avg, text: `مسیر به ${target} باز است · ${summary.received} از ${summary.sent} جواب` + (summary.avg ? ' · ' + summary.avg : '') });
@@ -2542,7 +2549,7 @@
                 peerTests.set(name, { state: 'fail', automatic, previousAvg, checkedAt: Date.now(), text: `پینگ ${target} از این تونل پاسخی نگرفت` });
             }
         } catch (err) {
-            peerTests.set(name, { state: 'fail', automatic, previousAvg, checkedAt: Date.now(), text: err.message });
+            peerTests.set(name, { state: 'error', automatic, previousAvg, checkedAt: Date.now(), text: 'اجرای تست: ' + err.message });
         }
         paintPeerTest(name);
     }
@@ -4849,7 +4856,7 @@
     function relayHealthStatus(model, test, now) {
         if (model?.disabled) return { state: 'problem', text: 'آفلاین · خاموش' };
         if (test?.state === 'running') return { state: 'checking', text: 'در حال تست…' };
-        if (test?.checkedAt && now - test.checkedAt <= LIVE_TEST_DISPLAY_MS) {
+        if (test?.checkedAt && test.state !== 'error' && now - test.checkedAt <= LIVE_TEST_DISPLAY_MS) {
             return test.state === 'ok' ? { state: 'ok', text: 'ارتباط برقرار' }
                 : { state: 'problem', text: 'مشکل ارتباط' };
         }
@@ -4899,7 +4906,7 @@
                 health: model?.health.ageText || model?.health.text || '—',
                 clients: model ? String(model.clients.length) : '—',
                 latency: model?.disabled ? 'خاموش' : test?.avg
-                    || (test?.state === 'running' ? 'در حال تست…' : test?.state === 'fail' ? 'بی‌پاسخ' : 'در صف تست'),
+                    || (test?.state === 'running' ? 'در حال تست…' : test?.state === 'fail' ? 'بی‌پاسخ' : test?.state === 'error' ? 'خطای تست' : 'در صف تست'),
                 rxSpeed: model ? formatSpeed(model.stats.rxSpeed) : '—',
                 txSpeed: model ? formatSpeed(model.stats.txSpeed) : '—',
                 rx: model ? formatBytes(model.stats.rx) : '',

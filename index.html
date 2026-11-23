@@ -536,8 +536,10 @@
         .chr-dns summary { cursor: pointer; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; }
         .chr-dns-menu { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; }
         .chr-dns-options { display: grid; gap: 4px; max-height: 200px; overflow-y: auto; }
-        .chr-dns-options label { display: flex; align-items: center; padding: 4px; cursor: pointer; }
-        #chrDhcpForm .chr-dns-options input { width: auto; }
+        .chr-dns-options button { text-align: start; background: var(--panel); border: 1px solid var(--border); }
+        .chr-dns-options button[aria-pressed="true"] { border-color: #60a5fa; background: #1d3558; }
+        .chr-dns-options button[aria-pressed="true"]::after { content: '✓'; float: inline-end; }
+        #chrDnsSelect[hidden] { display: none; }
         @media (max-width: 520px) { #chrDhcpForm { grid-template-columns: minmax(0, 1fr); } }
         .relay-settings label { display: grid; gap: 6px; font-size: 13px; }
         .relay-toolbar { grid-template-columns: minmax(150px, 2fr) repeat(3, minmax(118px, 1fr)) auto; }
@@ -890,6 +892,7 @@
                 <label>Gateway<input name="gateway" list="chrDhcpGateways" required dir="ltr"><datalist id="chrDhcpGateways"></datalist></label>
                 <label>ابتدای محدودهٔ IP<input name="first" required disabled dir="ltr"></label>
                 <label>انتهای محدودهٔ IP<input name="last" required disabled dir="ltr"></label>
+                <select id="chrDnsSelect" name="dns" multiple hidden></select>
                 <details class="chr-dns" id="chrDnsPicker">
                     <summary id="chrDnsSummary">انتخاب DNS</summary>
                     <div class="chr-dns-menu">
@@ -898,13 +901,14 @@
                         </label>
                         <span id="chrDnsError" role="status"></span>
                         <div class="chr-dns-options" id="chrDnsOptions" role="group" aria-label="سرویس‌های DNS">
-                            <label><input type="checkbox" name="dns" value="8.8.8.8,8.8.4.4"> <bdi>Google DNS</bdi></label>
-                            <label><input type="checkbox" name="dns" value="1.1.1.1,1.0.0.1"> <bdi>Cloudflare DNS</bdi></label>
-                            <label><input type="checkbox" name="dns" value="9.9.9.9,149.112.112.112"> <bdi>Quad9 DNS</bdi></label>
-                            <label><input type="checkbox" name="dns" value="208.67.222.222,208.67.220.220"> <bdi>OpenDNS</bdi></label>
+                            <button type="button" data-dns="8.8.8.8,8.8.4.4" aria-pressed="false"><bdi>Google DNS</bdi></button>
+                            <button type="button" data-dns="1.1.1.1,1.0.0.1" aria-pressed="false"><bdi>Cloudflare DNS</bdi></button>
+                            <button type="button" data-dns="9.9.9.9,149.112.112.112" aria-pressed="false"><bdi>Quad9 DNS</bdi></button>
+                            <button type="button" data-dns="208.67.222.222,208.67.220.220" aria-pressed="false"><bdi>OpenDNS</bdi></button>
                         </div>
                     </div>
                 </details>
+                <button type="button" id="chrDhcpSuggest" disabled>پیشنهاد دوباره</button>
                 <button type="submit" id="chrDhcpPrepare" disabled>ساخت DHCP غیرفعال</button>
             </form>
             <p><label><input type="checkbox" id="chrDhcpReady"> دسترسی با IP ثابت را آزمایش کرده‌ام و DHCP مودم را خاموش کرده‌ام.</label></p>
@@ -2851,14 +2855,20 @@
     const chrDhcpEnable = document.getElementById('chrDhcpEnable');
     const chrDhcpDisable = document.getElementById('chrDhcpDisable');
     const chrDhcpRefresh = document.getElementById('chrDhcpRefresh');
+    const chrDhcpSuggest = document.getElementById('chrDhcpSuggest');
+    let chrDhcpState;
 
     async function readChrDhcp() {
         if (!monitoring) throw new Error('ابتدا به CHR متصل شوید.');
-        const [addresses, servers, interfaces, members] = await Promise.all([
+        const [addresses, servers, interfaces, members, pools, leases, arp, networks] = await Promise.all([
             apiList('/ip/address?.proplist=address,interface,dynamic,disabled,invalid'),
             apiList('/ip/dhcp-server?.proplist=.id,name,interface,disabled,invalid,address-pool'),
             apiList('/interface?.proplist=name,type,disabled,slave'),
-            apiList('/interface/list/member?.proplist=list,interface')
+            apiList('/interface/list/member?.proplist=list,interface'),
+            apiList('/ip/pool?.proplist=name,ranges'),
+            apiList('/ip/dhcp-server/lease?.proplist=address,active-address'),
+            apiList('/ip/arp?.proplist=address'),
+            apiList('/ip/dhcp-server/network?.proplist=address,gateway,dns-server')
         ]);
         const lan = new Set(members.filter(row => row.list.toUpperCase() === 'LAN').map(row => row.interface));
         const wan = new Set(members.filter(row => row.list.toUpperCase() === 'WAN').map(row => row.interface));
@@ -2870,6 +2880,10 @@
             && !isTrue(row.invalid) && eligibleNames.has(row.interface) && isIpv4(ipOnly(row.address)));
         return {
             addresses: staticAddresses,
+            pools,
+            networks,
+            occupied: [...addresses.map(row => ipOnly(row.address)), ...arp.map(row => row.address),
+                ...leases.flatMap(row => [row.address, row['active-address']])].filter(isIpv4),
             needsStaticIp: eligible.filter(row => !staticAddresses.some(address => address.interface === row.name)),
             servers,
             managed: servers.find(row => row.name === chrDhcpName)
@@ -2880,7 +2894,7 @@
         if (chrDhcpRefresh.disabled) return;
         const status = document.getElementById('chrDhcpStatus');
         const list = document.getElementById('chrDhcpServers');
-        chrDhcpModem.disabled = chrDhcpRefresh.disabled = chrDhcpPrepare.disabled = chrDhcpEnable.disabled = chrDhcpDisable.disabled = true;
+        chrDhcpSuggest.disabled = chrDhcpModem.disabled = chrDhcpRefresh.disabled = chrDhcpPrepare.disabled = chrDhcpEnable.disabled = chrDhcpDisable.disabled = true;
         status.textContent = 'در حال ارتباط با CHR…';
         let state;
         try {
@@ -2917,11 +2931,16 @@
                 item.textContent = [server.name, server.interface, mode].join(' · ');
                 list.append(item);
             }
-            chrDhcpPrepare.disabled = !state || Boolean(state.managed) || !chrDhcpInterface.value;
+            chrDhcpState = state;
+            chrDhcpSuggest.disabled = chrDhcpPrepare.disabled = !state || Boolean(state.managed) || !chrDhcpInterface.value;
             chrDhcpEnable.disabled = !state?.managed || !isTrue(state.managed.disabled);
             chrDhcpDisable.disabled = !state?.managed || isTrue(state.managed.disabled);
             chrDhcpModem.disabled = chrDhcpRefresh.disabled = false;
-            updateChrGateway();
+            if (!chrDhcpSuggest.disabled && (selected !== chrDhcpInterface.value || !chrGateway.value)) {
+                suggestChrDhcp();
+            } else {
+                updateChrGateway();
+            }
         }
     }
 
@@ -2935,7 +2954,66 @@
             throw new Error('Gateway باید یک IPv4 قابل استفاده در subnet رابط LAN باشد.');
         }
         const subnet = [24, 16, 8, 0].map(shift => (network >>> shift) & 255).join('.') + '/' + prefix;
-        return { toNumber, usable, subnet };
+        return { toNumber, usable, subnet, network, size };
+    }
+
+    function suggestedChrRange(address, gateway, occupied, pools) {
+        const { toNumber, network, size } = chrSubnet(address, gateway);
+        const blocked = [...occupied, gateway].map(ip => [toNumber(ip), toNumber(ip)]);
+        for (const pool of pools) {
+            for (const range of (pool.ranges || '').split(',')) {
+                const [first, last = first] = range.trim().split('-');
+                if (isIpv4(first) && isIpv4(last)) blocked.push([toNumber(first), toNumber(last)]);
+            }
+        }
+        blocked.sort((a, b) => a[0] - b[0]);
+        const gaps = [];
+        let cursor = network + 1;
+        const end = network + size - 1;
+        for (const [first, last] of [...blocked, [end, end]]) {
+            if (first > cursor) gaps.push([cursor, Math.min(first, end) - 1]);
+            cursor = Math.max(cursor, last + 1);
+            if (cursor >= end) break;
+        }
+        const length = Math.min(50, Math.max(0, ...gaps.map(([first, last]) => last - first + 1)));
+        if (!length) throw new Error('در این subnet محدودهٔ آزاد برای پیشنهاد پیدا نشد.');
+        const candidates = gaps.filter(([first, last]) => last - first + 1 >= length);
+        const [start, last] = candidates[Math.floor(Math.random() * candidates.length)];
+        const first = start + Math.floor(Math.random() * (last - start - length + 2));
+        const formatIp = value => [24, 16, 8, 0].map(shift => (value >>> shift) & 255).join('.');
+        return [formatIp(first), formatIp(first + length - 1)];
+    }
+
+    function suggestChrDhcp() {
+        if (!chrDhcpState || !chrDhcpInterface.value) return;
+        const [, address] = JSON.parse(chrDhcpInterface.value);
+        const { first, last } = chrDhcpForm.elements;
+        first.value = last.value = '';
+        try {
+            const host = ipOnly(address);
+            const { subnet } = chrSubnet(address, host);
+            const existing = chrDhcpState.networks.find(row => row.address === subnet);
+            chrGateway.value = existing?.gateway || host;
+            const previousPool = chrDhcpState.pools.find(row => row.name === chrDhcpName);
+            const range = previousPool?.ranges?.split('-');
+            [first.value, last.value] = range?.length === 2 && range.every(isIpv4)
+                ? range : suggestedChrRange(address, chrGateway.value, chrDhcpState.occupied, chrDhcpState.pools);
+            const providers = [...chrDnsOptions.querySelectorAll('button[data-dns]')].filter(button => button.dataset.dns.includes(','));
+            const provider = providers[Math.floor(Math.random() * providers.length)];
+            for (const option of chrDnsSelect.options) option.selected = false;
+            if (existing?.['dns-server']) {
+                for (const ip of existing['dns-server'].split(',')) {
+                    if (isIpv4(ip)) selectChrDns(ip, true);
+                }
+            } else {
+                selectChrDns(provider.dataset.dns, true);
+            }
+            updateChrDnsSummary();
+            document.getElementById('chrDhcpStatus').textContent = '';
+        } catch (error) {
+            document.getElementById('chrDhcpStatus').textContent = error.message;
+        }
+        updateChrGateway();
     }
 
     function updateChrGateway() {
@@ -2971,19 +3049,24 @@
         const { toNumber, usable, subnet } = chrSubnet(address, gateway);
         const inPool = ip => toNumber(ip) >= toNumber(first) && toNumber(ip) <= toNumber(last);
         if (![first, last].every(usable) || toNumber(first) > toNumber(last)
-            || inPool(gateway) || state.addresses.some(row => inPool(ipOnly(row.address)))) {
-            throw new Error('محدوده باید در subnet گیت‌وی باشد و IP ثابت CHR و Gateway را شامل نشود.');
+            || inPool(gateway) || state.occupied.some(inPool)) {
+            throw new Error('محدوده باید در subnet گیت‌وی باشد و با Gateway یا IPهای شناخته‌شدهٔ شبکه تداخل نداشته باشد.');
         }
-        const [networks, pools] = await Promise.all([apiList('/ip/dhcp-server/network'), apiList('/ip/pool')]);
+        const { networks, pools } = state;
         const existing = networks.find(row => row.address === subnet);
         if (existing) {
-            if (existing.gateway !== gateway || existing['dns-server'] !== dns.join(',')) {
+            if (existing.gateway !== gateway || (existing['dns-server'] || '').split(',').sort().join(',') !== [...dns].sort().join(',')) {
                 throw new Error('تنظیم DHCP این subnet از قبل وجود دارد و Gateway یا DNS آن متفاوت است.');
             }
         }
         const ranges = first + '-' + last;
         const pool = pools.find(row => row.name === chrDhcpName);
         if (pool && pool.ranges !== ranges) throw new Error('محدودهٔ آماده‌شدهٔ قبلی متفاوت است.');
+        const overlaps = pools.some(row => row !== pool && (row.ranges || '').split(',').some(range => {
+            const [start, end = start] = range.trim().split('-');
+            return isIpv4(start) && isIpv4(end) && toNumber(start) <= toNumber(last) && toNumber(end) >= toNumber(first);
+        }));
+        if (overlaps) throw new Error('این محدوده با یک IP Pool موجود هم‌پوشانی دارد.');
         if (!pool) await apiFetch('/ip/pool', 'PUT', { name: chrDhcpName, ranges });
         if (!existing) await apiFetch('/ip/dhcp-server/network', 'PUT', { address: subnet, gateway, 'dns-server': dns.join(',') });
         await apiFetch('/ip/dhcp-server', 'PUT', { name: chrDhcpName, interface: iface, 'address-pool': chrDhcpName, disabled: 'yes' });
@@ -2997,17 +3080,47 @@
     const chrDnsSummary = document.getElementById('chrDnsSummary');
     const chrDnsError = document.getElementById('chrDnsError');
 
+    const chrDnsSelect = document.getElementById('chrDnsSelect');
+
+    function selectChrDns(value, selected) {
+        let option = [...chrDnsSelect.options].find(item => item.value === value);
+        if (!option) {
+            let button = [...chrDnsOptions.querySelectorAll('button[data-dns]')].find(item => item.dataset.dns === value);
+            if (!button) {
+                button = document.createElement('button');
+                button.type = 'button';
+                button.dataset.dns = value;
+                const name = document.createElement('bdi');
+                name.textContent = value;
+                button.append(name);
+                chrDnsOptions.append(button);
+            }
+            option = new Option(button.textContent, value);
+            chrDnsSelect.add(option);
+        }
+        option.selected = selected;
+    }
+
     function updateChrDnsSummary() {
-        const selected = [...chrDnsOptions.querySelectorAll('input:checked')];
+        const selected = [...chrDnsSelect.selectedOptions];
+        const values = new Set(selected.map(option => option.value));
+        for (const button of chrDnsOptions.querySelectorAll('button[data-dns]')) {
+            button.setAttribute('aria-pressed', String(values.has(button.dataset.dns)));
+        }
         chrDnsSummary.textContent = selected.length ? 'DNS · ' : 'انتخاب DNS';
         if (selected.length) {
             const names = document.createElement('bdi');
-            names.textContent = selected.map(input => input.nextElementSibling.textContent).join('، ');
+            names.textContent = selected.map(option => option.textContent).join('، ');
             chrDnsSummary.append(names);
         }
     }
 
-    chrDnsOptions.addEventListener('change', updateChrDnsSummary);
+    chrDnsOptions.addEventListener('click', event => {
+        const button = event.target.closest('button[data-dns]');
+        if (!button) return;
+        selectChrDns(button.dataset.dns, button.getAttribute('aria-pressed') !== 'true');
+        updateChrDnsSummary();
+    });
     chrDnsInput.addEventListener('input', () => { chrDnsError.textContent = ''; });
     chrDnsInput.addEventListener('keydown', event => {
         if (event.key !== 'Enter' || event.isComposing) return;
@@ -3018,19 +3131,7 @@
             return;
         }
         const address = raw.split('.').map(Number).join('.');
-        let option = [...chrDnsOptions.querySelectorAll('input')].find(input => input.value === address);
-        if (!option) {
-            const label = document.createElement('label');
-            option = document.createElement('input');
-            option.type = 'checkbox';
-            option.name = 'dns';
-            option.value = address;
-            const text = document.createElement('bdi');
-            text.textContent = address;
-            label.append(option, text);
-            chrDnsOptions.append(label);
-        }
-        option.checked = true;
+        selectChrDns(address, true);
         chrDnsInput.value = '';
         chrDnsError.textContent = '';
         updateChrDnsSummary();
@@ -3044,7 +3145,8 @@
         if (chrDnsPicker.open && !chrDnsPicker.contains(event.target)) chrDnsPicker.open = false;
     });
 
-    chrDhcpInterface.addEventListener('change', updateChrGateway);
+    chrDhcpSuggest.addEventListener('click', suggestChrDhcp);
+    chrDhcpInterface.addEventListener('change', suggestChrDhcp);
     chrGateway.addEventListener('input', updateChrGateway);
     chrDhcpForm.addEventListener('submit', event => {
         event.preventDefault();

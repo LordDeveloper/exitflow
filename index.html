@@ -530,6 +530,12 @@
         .relay-settings-panel { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
         .relay-settings, .relay-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 10px; align-items: end; }
         .relay-settings { margin: 12px 0; }
+        #chrDhcpForm { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        #chrDhcpForm select { width: 100%; min-width: 0; }
+        .chr-dns { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px 18px; min-width: 0; border: 1px solid var(--border); border-radius: 8px; }
+        .chr-dns label { display: flex; align-items: center; }
+        #chrDhcpForm .chr-dns input { width: auto; }
+        @media (max-width: 520px) { #chrDhcpForm { grid-template-columns: minmax(0, 1fr); } }
         .relay-settings label { display: grid; gap: 6px; font-size: 13px; }
         .relay-toolbar { grid-template-columns: minmax(150px, 2fr) repeat(3, minmax(118px, 1fr)) auto; }
         .relay-country-picker { position: relative; min-width: 0; }
@@ -873,22 +879,20 @@
     <div id="tabChr" class="tab-panel" role="tabpanel" hidden>
         <section class="card">
             <h2>انتقال DHCP به CHR</h2>
-            <ol>
-                <li>در VMware، VMnet0 را به کارت Wi‑Fi متصل به مودم اختصاص دهید. اتصال کارت شبکهٔ CHR به VMnet0 و دسترسی به کنسول ماشین مجازی را بررسی کنید.</li>
-                <li>قبل از خاموش کردن DHCP مودم، روی ویندوز برای Wi‑Fi یک IPv4 آزاد و ثابت در subnet مودم و خارج از pool تنظیم کنید. باز شدن صفحهٔ مودم و CHR را با همین تنظیم آزمایش کنید.</li>
-                <li>روی رابط LAN در CHR یک IP ثابت داشته باشید. برای انتقال فقط DHCP، IP مودم را به‌عنوان Gateway وارد کنید. اگر CHR باید Gateway کلاینت‌ها باشد، ابتدا مسیریابی اینترنت CHR را جداگانه تأیید کنید و IP ثابت CHR را وارد کنید.</li>
-                <li>DHCP را روی CHR در حالت غیرفعال بسازید. پس از خاموش کردن DHCP مودم آن را فعال کنید و با یک دستگاه دیگر گرفتن IP، Gateway و اینترنت را آزمایش کنید.</li>
-                <li>اگر تست موفق نبود، DHCP در CHR را خاموش و DHCP مودم را دوباره روشن کنید. پس از موفقیت تست می‌توانید IP ویندوز را به حالت خودکار برگردانید.</li>
-            </ol>
-            <p class="muted">ارتباط REST با CHR فقط دسترسی مدیریتی را تأیید می‌کند. عبور DHCP broadcast از Wi‑Fi و VMware را با دریافت lease روی یک دستگاه آزمایشی تأیید کنید.</p>
             <button type="button" id="chrDhcpRefresh">خواندن وضعیت CHR</button>
             <ul id="chrDhcpServers"></ul>
             <form id="chrDhcpForm" class="relay-settings">
                 <label>رابط LAN<select id="chrDhcpInterface" required></select></label>
-                <label>ابتدای محدودهٔ IP<input name="first" required dir="ltr"></label>
-                <label>انتهای محدودهٔ IP<input name="last" required dir="ltr"></label>
-                <label>Gateway<input name="gateway" required dir="ltr"></label>
-                <label>DNS (جداشده با ویرگول)<input name="dns" required dir="ltr"></label>
+                <label>Gateway<input name="gateway" list="chrDhcpGateways" required dir="ltr"><datalist id="chrDhcpGateways"></datalist></label>
+                <label>ابتدای محدودهٔ IP<input name="first" required disabled dir="ltr"></label>
+                <label>انتهای محدودهٔ IP<input name="last" required disabled dir="ltr"></label>
+                <fieldset class="chr-dns">
+                    <legend>DNS</legend>
+                    <label><input type="checkbox" name="dns" value="8.8.8.8,8.8.4.4"> Google DNS</label>
+                    <label><input type="checkbox" name="dns" value="1.1.1.1,1.0.0.1"> Cloudflare DNS</label>
+                    <label><input type="checkbox" name="dns" value="9.9.9.9,149.112.112.112"> Quad9 DNS</label>
+                    <label><input type="checkbox" name="dns" value="208.67.222.222,208.67.220.220"> OpenDNS</label>
+                </fieldset>
                 <button type="submit" id="chrDhcpPrepare" disabled>ساخت DHCP غیرفعال</button>
             </form>
             <p><label><input type="checkbox" id="chrDhcpReady"> دسترسی با IP ثابت را آزمایش کرده‌ام و DHCP مودم را خاموش کرده‌ام.</label></p>
@@ -2826,6 +2830,8 @@
     }
 
     const chrDhcpName = 'exitflow-lan';
+    const chrDhcpForm = document.getElementById('chrDhcpForm');
+    const chrGateway = chrDhcpForm.elements.gateway;
     const chrDhcpInterface = document.getElementById('chrDhcpInterface');
     const chrDhcpReady = document.getElementById('chrDhcpReady');
     const chrDhcpPrepare = document.getElementById('chrDhcpPrepare');
@@ -2835,13 +2841,20 @@
 
     async function readChrDhcp() {
         if (!monitoring) throw new Error('ابتدا به CHR متصل شوید.');
-        const [addresses, servers] = await Promise.all([
+        const [addresses, servers, interfaces, members] = await Promise.all([
             apiList('/ip/address?.proplist=address,interface,dynamic,disabled,invalid'),
-            apiList('/ip/dhcp-server?.proplist=.id,name,interface,disabled,invalid,address-pool')
+            apiList('/ip/dhcp-server?.proplist=.id,name,interface,disabled,invalid,address-pool'),
+            apiList('/interface?.proplist=name,type,disabled,slave'),
+            apiList('/interface/list/member?.proplist=list,interface')
         ]);
+        const lan = new Set(members.filter(row => row.list.toUpperCase() === 'LAN').map(row => row.interface));
+        const wan = new Set(members.filter(row => row.list.toUpperCase() === 'WAN').map(row => row.interface));
+        const eligible = new Set(interfaces.filter(row => ['ether', 'bridge', 'vlan', 'wlan', 'wifi', 'bonding'].includes(row.type)
+            && !isTrue(row.disabled) && !isTrue(row.slave) && !wan.has(row.name)
+            && (!lan.size || lan.has(row.name))).map(row => row.name));
         return {
             addresses: addresses.filter(row => !isTrue(row.dynamic) && !isTrue(row.disabled)
-                && !isTrue(row.invalid) && isIpv4(ipOnly(row.address))),
+                && !isTrue(row.invalid) && eligible.has(row.interface) && isIpv4(ipOnly(row.address))),
             servers,
             managed: servers.find(row => row.name === chrDhcpName)
         };
@@ -2885,7 +2898,37 @@
             chrDhcpEnable.disabled = !state?.managed || !isTrue(state.managed.disabled);
             chrDhcpDisable.disabled = !state?.managed || isTrue(state.managed.disabled);
             chrDhcpRefresh.disabled = false;
+            updateChrGateway();
         }
+    }
+
+    function chrSubnet(address, gateway) {
+        const toNumber = ip => ip.split('.').reduce((value, part) => value * 256 + Number(part), 0);
+        const [host, prefix] = address.split('/');
+        const size = 2 ** (32 - Number(prefix));
+        const network = Math.floor(toNumber(host) / size) * size;
+        const usable = ip => toNumber(ip) > network && toNumber(ip) < network + size - 1;
+        if (!isIpv4(gateway) || !usable(gateway)) {
+            throw new Error('Gateway باید یک IPv4 قابل استفاده در subnet رابط LAN باشد.');
+        }
+        const subnet = [24, 16, 8, 0].map(shift => (network >>> shift) & 255).join('.') + '/' + prefix;
+        return { toNumber, usable, subnet };
+    }
+
+    function updateChrGateway() {
+        const address = chrDhcpInterface.value ? JSON.parse(chrDhcpInterface.value)[1] : '';
+        const option = document.createElement('option');
+        option.value = ipOnly(address);
+        document.getElementById('chrDhcpGateways').replaceChildren(...(address ? [option] : []));
+        let error = '';
+        try {
+            if (address && chrGateway.value.trim()) chrSubnet(address, chrGateway.value.trim());
+        } catch (cause) {
+            error = cause.message;
+        }
+        chrGateway.setCustomValidity(error);
+        const rangeDisabled = !address || !chrGateway.value.trim() || Boolean(error);
+        chrDhcpForm.elements.first.disabled = chrDhcpForm.elements.last.disabled = rangeDisabled;
     }
 
     async function prepareChrDhcp(form, state) {
@@ -2899,19 +2942,15 @@
         const first = values.get('first').trim();
         const last = values.get('last').trim();
         const gateway = values.get('gateway').trim();
-        const dns = values.get('dns').split(',').map(ip => ip.trim());
-        if (![first, last, gateway, ...dns].every(isIpv4)) throw new Error('آدرس‌های IPv4 را بررسی کنید.');
-        const toNumber = ip => ip.split('.').reduce((value, part) => value * 256 + Number(part), 0);
-        const [host, prefix] = address.split('/');
-        const size = 2 ** (32 - Number(prefix));
-        const network = Math.floor(toNumber(host) / size) * size;
-        const usable = ip => toNumber(ip) > network && toNumber(ip) < network + size - 1;
+        const dns = [...new Set(values.getAll('dns').flatMap(pair => pair.split(',')))];
+        if (!dns.length) throw new Error('حداقل یک سرویس DNS انتخاب کنید.');
+        if (![first, last, ...dns].every(isIpv4)) throw new Error('آدرس‌های IPv4 را بررسی کنید.');
+        const { toNumber, usable, subnet } = chrSubnet(address, gateway);
         const inPool = ip => toNumber(ip) >= toNumber(first) && toNumber(ip) <= toNumber(last);
-        if (![first, last, gateway].every(usable) || toNumber(first) > toNumber(last)
+        if (![first, last].every(usable) || toNumber(first) > toNumber(last)
             || inPool(gateway) || state.addresses.some(row => inPool(ipOnly(row.address)))) {
-            throw new Error('محدوده باید در subnet رابط LAN باشد و IP ثابت CHR و Gateway را شامل نشود.');
+            throw new Error('محدوده باید در subnet گیت‌وی باشد و IP ثابت CHR و Gateway را شامل نشود.');
         }
-        const subnet = [24, 16, 8, 0].map(shift => (network >>> shift) & 255).join('.') + '/' + prefix;
         const [networks, pools] = await Promise.all([apiList('/ip/dhcp-server/network'), apiList('/ip/pool')]);
         const existing = networks.find(row => row.address === subnet);
         if (existing) {
@@ -2928,7 +2967,9 @@
     }
 
     chrDhcpRefresh.addEventListener('click', () => void runChrDhcpAction());
-    document.getElementById('chrDhcpForm').addEventListener('submit', event => {
+    chrDhcpInterface.addEventListener('change', updateChrGateway);
+    chrGateway.addEventListener('input', updateChrGateway);
+    chrDhcpForm.addEventListener('submit', event => {
         event.preventDefault();
         const form = event.currentTarget;
         void runChrDhcpAction(state => prepareChrDhcp(form, state));

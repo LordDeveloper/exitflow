@@ -722,6 +722,7 @@
     <div class="tab-bar" id="mainTabs">
         <div class="tab-list" role="tablist">
             <button type="button" class="tab active" data-tab="clients" role="tab" aria-selected="true" aria-controls="tabClients">کلاینت‌ها</button>
+            <button type="button" class="tab" data-tab="chr" role="tab" aria-selected="false" aria-controls="tabChr">CHR / DHCP</button>
             <button type="button" class="tab" data-tab="wireguard" role="tab" aria-selected="false" aria-controls="tabWireguard">اینترفیس‌های WireGuard <span class="tab-count" id="wgTabCount">0</span></button>
             <button type="button" class="tab" data-tab="pathtest" role="tab" aria-selected="false" aria-controls="tabPathTest">تست مسیر</button>
             <button type="button" class="tab" data-tab="rulesaudit" role="tab" aria-selected="false" aria-controls="tabRulesAudit">بررسی Ruleها و عوامل موثر <span class="tab-count" id="auditIssueCount">0</span></button>
@@ -867,6 +868,34 @@
             </div>
             <div id="pathTestResult" class="test-result muted">۳ بسته به 1.1.1.1 از طریق اینترفیس همان Peer فرستاده می‌شود.</div>
         </div>
+    </div>
+
+    <div id="tabChr" class="tab-panel" role="tabpanel" hidden>
+        <section class="card">
+            <h2>انتقال DHCP به CHR</h2>
+            <ol>
+                <li>در VMware، VMnet0 را به کارت Wi‑Fi متصل به مودم اختصاص دهید. اتصال کارت شبکهٔ CHR به VMnet0 و دسترسی به کنسول ماشین مجازی را بررسی کنید.</li>
+                <li>قبل از خاموش کردن DHCP مودم، روی ویندوز برای Wi‑Fi یک IPv4 آزاد و ثابت در subnet مودم و خارج از pool تنظیم کنید. باز شدن صفحهٔ مودم و CHR را با همین تنظیم آزمایش کنید.</li>
+                <li>روی رابط LAN در CHR یک IP ثابت داشته باشید. برای انتقال فقط DHCP، IP مودم را به‌عنوان Gateway وارد کنید. اگر CHR باید Gateway کلاینت‌ها باشد، ابتدا مسیریابی اینترنت CHR را جداگانه تأیید کنید و IP ثابت CHR را وارد کنید.</li>
+                <li>DHCP را روی CHR در حالت غیرفعال بسازید. پس از خاموش کردن DHCP مودم آن را فعال کنید و با یک دستگاه دیگر گرفتن IP، Gateway و اینترنت را آزمایش کنید.</li>
+                <li>اگر تست موفق نبود، DHCP در CHR را خاموش و DHCP مودم را دوباره روشن کنید. پس از موفقیت تست می‌توانید IP ویندوز را به حالت خودکار برگردانید.</li>
+            </ol>
+            <p class="muted">ارتباط REST با CHR فقط دسترسی مدیریتی را تأیید می‌کند. عبور DHCP broadcast از Wi‑Fi و VMware را با دریافت lease روی یک دستگاه آزمایشی تأیید کنید.</p>
+            <button type="button" id="chrDhcpRefresh">خواندن وضعیت CHR</button>
+            <ul id="chrDhcpServers"></ul>
+            <form id="chrDhcpForm" class="relay-settings">
+                <label>رابط LAN<select id="chrDhcpInterface" required></select></label>
+                <label>ابتدای محدودهٔ IP<input name="first" required dir="ltr"></label>
+                <label>انتهای محدودهٔ IP<input name="last" required dir="ltr"></label>
+                <label>Gateway<input name="gateway" required dir="ltr"></label>
+                <label>DNS (جداشده با ویرگول)<input name="dns" required dir="ltr"></label>
+                <button type="submit" id="chrDhcpPrepare" disabled>ساخت DHCP غیرفعال</button>
+            </form>
+            <p><label><input type="checkbox" id="chrDhcpReady"> دسترسی با IP ثابت را آزمایش کرده‌ام و DHCP مودم را خاموش کرده‌ام.</label></p>
+            <button type="button" id="chrDhcpEnable" disabled>فعال‌کردن DHCP</button>
+            <button type="button" id="chrDhcpDisable" disabled>غیرفعال‌کردن DHCP</button>
+            <p id="chrDhcpStatus" role="status"></p>
+        </section>
     </div>
 
     <div id="tabRulesAudit" class="tab-panel" role="tabpanel" hidden>
@@ -2782,6 +2811,8 @@
         document.getElementById('tabClients').hidden = name !== 'clients';
         document.getElementById('tabWireguard').hidden = name !== 'wireguard';
         document.getElementById('tabPathTest').hidden = name !== 'pathtest';
+        document.getElementById('tabChr').hidden = name !== 'chr';
+        if (name === 'chr') void runChrDhcpAction();
         document.getElementById('tabRulesAudit').hidden = name !== 'rulesaudit';
         document.querySelectorAll('#mainTabs .tab').forEach((button) => {
             const selected = button.dataset.tab === name;
@@ -2793,6 +2824,133 @@
             runRulesAndFactorsAudit();
         }
     }
+
+    const chrDhcpName = 'exitflow-lan';
+    const chrDhcpInterface = document.getElementById('chrDhcpInterface');
+    const chrDhcpReady = document.getElementById('chrDhcpReady');
+    const chrDhcpPrepare = document.getElementById('chrDhcpPrepare');
+    const chrDhcpEnable = document.getElementById('chrDhcpEnable');
+    const chrDhcpDisable = document.getElementById('chrDhcpDisable');
+    const chrDhcpRefresh = document.getElementById('chrDhcpRefresh');
+
+    async function readChrDhcp() {
+        if (!monitoring) throw new Error('ابتدا به CHR متصل شوید.');
+        const [addresses, servers] = await Promise.all([
+            apiList('/ip/address?.proplist=address,interface,dynamic,disabled,invalid'),
+            apiList('/ip/dhcp-server?.proplist=.id,name,interface,disabled,invalid,address-pool')
+        ]);
+        return {
+            addresses: addresses.filter(row => !isTrue(row.dynamic) && !isTrue(row.disabled)
+                && !isTrue(row.invalid) && isIpv4(ipOnly(row.address))),
+            servers,
+            managed: servers.find(row => row.name === chrDhcpName)
+        };
+    }
+
+    async function runChrDhcpAction(action) {
+        if (chrDhcpRefresh.disabled) return;
+        const status = document.getElementById('chrDhcpStatus');
+        const list = document.getElementById('chrDhcpServers');
+        chrDhcpRefresh.disabled = chrDhcpPrepare.disabled = chrDhcpEnable.disabled = chrDhcpDisable.disabled = true;
+        status.textContent = 'در حال ارتباط با CHR…';
+        let state;
+        try {
+            state = await readChrDhcp();
+            if (action) {
+                await action(state);
+                state = await readChrDhcp();
+            }
+            status.textContent = 'وضعیت CHR دریافت شد.';
+        } catch (error) {
+            if (action) state = await readChrDhcp().catch(() => null);
+            status.textContent = error.message;
+        } finally {
+            const selected = chrDhcpInterface.value;
+            chrDhcpInterface.replaceChildren();
+            list.replaceChildren();
+            for (const row of state?.addresses || []) {
+                const option = document.createElement('option');
+                option.value = JSON.stringify([row.interface, row.address]);
+                option.textContent = row.interface + ' · ' + row.address;
+                chrDhcpInterface.append(option);
+            }
+            if ([...chrDhcpInterface.options].some(option => option.value === selected)) chrDhcpInterface.value = selected;
+            for (const server of state?.servers || []) {
+                const item = document.createElement('li');
+                const mode = isTrue(server.disabled) ? 'غیرفعال' : isTrue(server.invalid) ? 'نامعتبر' : 'فعال';
+                item.textContent = [server.name, server.interface, mode].join(' · ');
+                list.append(item);
+            }
+            chrDhcpPrepare.disabled = !state || Boolean(state.managed) || !chrDhcpInterface.value;
+            chrDhcpEnable.disabled = !state?.managed || !isTrue(state.managed.disabled);
+            chrDhcpDisable.disabled = !state?.managed || isTrue(state.managed.disabled);
+            chrDhcpRefresh.disabled = false;
+        }
+    }
+
+    async function prepareChrDhcp(form, state) {
+        if (!chrDhcpInterface.value || state.managed) throw new Error('ساخت DHCP برای این انتخاب ممکن نیست.');
+        const [iface, address] = JSON.parse(chrDhcpInterface.value);
+        if (!state.addresses.some(row => row.interface === iface && row.address === address)
+            || state.servers.some(row => row.interface === iface)) {
+            throw new Error('رابط باید IP ثابت داشته باشد و DHCP Server دیگری روی آن تعریف نشده باشد.');
+        }
+        const values = new FormData(form);
+        const first = values.get('first').trim();
+        const last = values.get('last').trim();
+        const gateway = values.get('gateway').trim();
+        const dns = values.get('dns').split(',').map(ip => ip.trim());
+        if (![first, last, gateway, ...dns].every(isIpv4)) throw new Error('آدرس‌های IPv4 را بررسی کنید.');
+        const toNumber = ip => ip.split('.').reduce((value, part) => value * 256 + Number(part), 0);
+        const [host, prefix] = address.split('/');
+        const size = 2 ** (32 - Number(prefix));
+        const network = Math.floor(toNumber(host) / size) * size;
+        const usable = ip => toNumber(ip) > network && toNumber(ip) < network + size - 1;
+        const inPool = ip => toNumber(ip) >= toNumber(first) && toNumber(ip) <= toNumber(last);
+        if (![first, last, gateway].every(usable) || toNumber(first) > toNumber(last)
+            || inPool(gateway) || state.addresses.some(row => inPool(ipOnly(row.address)))) {
+            throw new Error('محدوده باید در subnet رابط LAN باشد و IP ثابت CHR و Gateway را شامل نشود.');
+        }
+        const subnet = [24, 16, 8, 0].map(shift => (network >>> shift) & 255).join('.') + '/' + prefix;
+        const [networks, pools] = await Promise.all([apiList('/ip/dhcp-server/network'), apiList('/ip/pool')]);
+        const existing = networks.find(row => row.address === subnet);
+        if (existing) {
+            if (existing.gateway !== gateway || existing['dns-server'] !== dns.join(',')) {
+                throw new Error('تنظیم DHCP این subnet از قبل وجود دارد و Gateway یا DNS آن متفاوت است.');
+            }
+        }
+        const ranges = first + '-' + last;
+        const pool = pools.find(row => row.name === chrDhcpName);
+        if (pool && pool.ranges !== ranges) throw new Error('محدودهٔ آماده‌شدهٔ قبلی متفاوت است.');
+        if (!pool) await apiFetch('/ip/pool', 'PUT', { name: chrDhcpName, ranges });
+        if (!existing) await apiFetch('/ip/dhcp-server/network', 'PUT', { address: subnet, gateway, 'dns-server': dns.join(',') });
+        await apiFetch('/ip/dhcp-server', 'PUT', { name: chrDhcpName, interface: iface, 'address-pool': chrDhcpName, disabled: 'yes' });
+    }
+
+    chrDhcpRefresh.addEventListener('click', () => void runChrDhcpAction());
+    document.getElementById('chrDhcpForm').addEventListener('submit', event => {
+        event.preventDefault();
+        const form = event.currentTarget;
+        void runChrDhcpAction(state => prepareChrDhcp(form, state));
+    });
+    chrDhcpEnable.addEventListener('click', () => {
+        if (!chrDhcpReady.checked) {
+            document.getElementById('chrDhcpStatus').textContent = 'ابتدا دسترسی با IP ثابت و خاموش بودن DHCP مودم را تأیید کنید.';
+            return;
+        }
+        void runChrDhcpAction(({managed, servers}) => {
+            if (!managed || servers.some(row => row !== managed && row.interface === managed.interface && !isTrue(row.disabled))) {
+                throw new Error('DHCP آماده نیست یا سرور دیگری روی همین رابط فعال است.');
+            }
+            return apiFetch('/ip/dhcp-server/' + assertId(managed['.id']), 'PATCH', { disabled: 'no' });
+        });
+    });
+    chrDhcpDisable.addEventListener('click', () => {
+        void runChrDhcpAction(async ({managed}) => {
+            if (managed) await apiFetch('/ip/dhcp-server/' + assertId(managed['.id']), 'PATCH', { disabled: 'yes' });
+            chrDhcpReady.checked = false;
+        });
+    });
 
     function emptyClientCards() {
         if (!monitoring) renderClientCards();

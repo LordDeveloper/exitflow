@@ -8,8 +8,6 @@ import ssl
 import urllib.request
 import urllib.error
 import os
-import webbrowser
-import threading
 
 START_PORT = 8080
 HTML_CANDIDATES = [
@@ -224,7 +222,6 @@ def run():
     url = f"http://127.0.0.1:{port}"
     print(f"Server is running at {url}")
     print("Press Ctrl+C to stop.")
-    threading.Timer(1.0, lambda: webbrowser.open(url)).start()
     server.serve_forever()
 
 if __name__ == "__main__":

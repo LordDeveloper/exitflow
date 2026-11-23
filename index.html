@@ -785,6 +785,11 @@
                         <span class="switch-ui" aria-hidden="true"></span>
                         <span>مخفی‌کردن نودهای خاموش</span>
                     </label>
+                    <label class="switch" for="autoRelayFailover">
+                        <input type="checkbox" id="autoRelayFailover">
+                        <span class="switch-ui" aria-hidden="true"></span>
+                        <span>تعویض خودکار رلهٔ بی‌پاسخ</span>
+                    </label>
                     <span id="relayCatalogStatus" role="status"></span>
                     <span id="relayManagementStatus" role="status"></span>
                 </div>
@@ -1057,6 +1062,10 @@
     const peerTests = new Map();
     const LIVE_TEST_DISPLAY_MS = 60_000;
     let lastAutomaticPing = -Infinity;
+    const relayProbeFailures = new Map();
+    const relayFailoverAttempts = new Map();
+    let lastRelayFailover = -Infinity;
+    const AUTO_RELAY_FAILOVER_PREF = 'mullvadDash.autoRelayFailover';
     let prevIfaceStats = new Map();
     let prevClientBytes = new Map();
     let prevTimestamp = 0;
@@ -1356,6 +1365,9 @@
         clientKeyOrder = [];
         resetSpeedWindow();
         emptyClientCards();
+        relayProbeFailures.clear();
+        relayFailoverAttempts.clear();
+        lastRelayFailover = -Infinity;
         installedRelays = null;
         document.getElementById('wgTabCount').textContent = '0';
         renderRelayManagement();
@@ -2509,12 +2521,18 @@
                 result = await apiFetch('/ping', 'POST', retryPayload, automatic ? 5000 : 25000);
             }
             const summary = summarizePing(result);
+            if (automatic && !summary.received && summary.sent > 0) {
+                handleAutomaticRelayFailure(name, target);
+            } else if (automatic) {
+                relayProbeFailures.delete(name);
+            }
             if (summary.received > 0) {
                 peerTests.set(name, { state: 'ok', automatic, checkedAt: Date.now(), avg: summary.avg, text: `مسیر به ${target} باز است · ${summary.received} از ${summary.sent} جواب` + (summary.avg ? ' · ' + summary.avg : '') });
             } else {
                 peerTests.set(name, { state: 'fail', automatic, checkedAt: Date.now(), text: `پینگ ${target} از این تونل پاسخی نگرفت` });
             }
         } catch (err) {
+            if (automatic) relayProbeFailures.delete(name);
             peerTests.set(name, { state: 'fail', automatic, checkedAt: Date.now(), text: err.message });
         }
         paintPeerTest(name);
@@ -4757,6 +4775,46 @@
             : { state: 'problem', text: 'آفلاین' };
     }
 
+    function automaticFailoverEnabled() {
+        return document.getElementById('autoRelayFailover').checked;
+    }
+
+    function selectFallbackRelay(catalog, iface, installed) {
+        const current = catalog.find(relay => relay.ip === iface.peer?.['endpoint-address']
+            && relay.publicKey === iface.peer?.['public-key']);
+        if (!current?.city) return null;
+        const cityRelays = catalog.filter(relay => relayCityKey(relay) === relayCityKey(current));
+        const index = cityRelays.indexOf(current);
+        const alternatives = cityRelays.slice(index + 1).concat(cityRelays.slice(0, index));
+        return alternatives.find(relay => relay.active && relay.ip !== current.ip
+            && !installed.some(item => item.name !== iface.name
+                && item.peer?.['endpoint-address'] === relay.ip)) || null;
+    }
+
+    function handleAutomaticRelayFailure(name, target) {
+        if (!automaticFailoverEnabled() || !monitoring || busy || relayBusy
+            || document.hidden || document.getElementById('tabWireguard').hidden || !name.startsWith('mv-wg-')) return;
+        const iface = installedRelays?.get(name.slice(6));
+        if (!iface?.peer || isTrue(iface.disabled)) return;
+        const now = Date.now();
+        const endpoint = iface.peer['endpoint-address'];
+        const prior = relayProbeFailures.get(name);
+        relayProbeFailures.set(name, { endpoint, target, at: now });
+        if (!prior || prior.endpoint !== endpoint || prior.target === target || now - prior.at > 120_000
+            || now - lastRelayFailover < 30_000 || now - (relayFailoverAttempts.get(name) ?? -Infinity) < 300_000) return;
+        const alternative = selectFallbackRelay(relayCatalog, iface, [...installedRelays.values()]);
+        if (!alternative) return;
+        relayProbeFailures.delete(name);
+        relayFailoverAttempts.set(name, now);
+        lastRelayFailover = now;
+        void runRelayAction(async () => {
+            await changeCityRelay(iface, alternative.name, true);
+            await loadInstalledRelays();
+            void refreshAll().catch(error => setPollStatus(error.message));
+            return `رلهٔ بی‌پاسخ ${name} به‌طور خودکار به ${alternative.name} تغییر کرد`;
+        });
+    }
+
     function scheduleVisiblePeerPing(cards, models, now) {
         if (!monitoring || !isLive || document.hidden || busy || relayBusy || now - lastAutomaticPing < 2000
             || [...peerTests.values()].some(test => test.state === 'running')) return;
@@ -4767,13 +4825,17 @@
             const model = models.get(name);
             if (!model || model.disabled) continue;
             const checkedAt = peerTests.get(name)?.checkedAt || 0;
-            if (now - checkedAt < LIVE_TEST_DISPLAY_MS || checkedAt >= oldest) continue;
+            const firstFailure = automaticFailoverEnabled() && relayProbeFailures.get(name);
+            const interval = firstFailure && now - firstFailure.at <= 120_000 ? 6000 : LIVE_TEST_DISPLAY_MS;
+            if (now - checkedAt < interval || checkedAt >= oldest) continue;
             candidate = name;
             oldest = checkedAt;
         }
         if (candidate) {
             lastAutomaticPing = now;
-            void testPeerPath(candidate, undefined, undefined, 1, true);
+            const prior = automaticFailoverEnabled() && relayProbeFailures.get(candidate);
+            const target = prior?.target === '1.1.1.1' ? '8.8.8.8' : '1.1.1.1';
+            void testPeerPath(candidate, undefined, target, 1, true);
         }
     }
 
@@ -4823,7 +4885,7 @@
         });
     }
 
-    async function changeCityRelay(iface, name) {
+    async function changeCityRelay(iface, name, automatic = false) {
         const relay = relayCatalog.find(item => item.name === name);
         if (!relay || !iface.peer) throw new Error('برای تغییر رله باید اینترفیس دقیقاً یک peer داشته باشد');
         const [interfaces, peers, routes] = await Promise.all([
@@ -4831,6 +4893,14 @@
             apiList('/interface/wireguard/peers?.proplist=.id,interface,endpoint-address,current-endpoint-address,public-key'),
             apiList('/ip/route?.proplist=.id,dst-address,gateway,routing-table,disabled')
         ]);
+        if (automatic) {
+            const current = peers.find(peer => peer['.id'] === iface.peer['.id'] && peer.interface === iface.name);
+            const enabled = interfaces.some(item => item.name === iface.name && !isTrue(item.disabled));
+            if (!enabled || !current || current['endpoint-address'] !== iface.peer['endpoint-address']
+                || current['public-key'] !== iface.peer['public-key'] || !automaticFailoverEnabled()) {
+                throw new Error('وضعیت نود تغییر کرده است؛ تعویض خودکار انجام نشد');
+            }
+        }
         if (peers.some(peer => peer.interface !== iface.name && peer['endpoint-address'] === relay.ip
             && peer['public-key'] === relay.publicKey)) {
             throw new Error('این رله از قبل روی اینترفیس دیگری نصب شده است');
@@ -5034,6 +5104,17 @@
         document.getElementById('relayCountryLabel').focus();
     });
     document.getElementById('relayInstallFilter').addEventListener('change', resetRelayPage);
+    const failoverToggle = document.getElementById('autoRelayFailover');
+    try {
+        failoverToggle.checked = localStorage.getItem(AUTO_RELAY_FAILOVER_PREF) === '1';
+    } catch (error) { /* private mode */ }
+    failoverToggle.addEventListener('change', () => {
+        relayProbeFailures.clear();
+        try {
+            localStorage.setItem(AUTO_RELAY_FAILOVER_PREF, failoverToggle.checked ? '1' : '0');
+        } catch (error) { /* private mode */ }
+        updateRelayCardStats();
+    });
     document.getElementById('hideDisabledRelays').addEventListener('change', resetRelayPage);
     document.getElementById('relayRouterSync').addEventListener('click', () => void runRelayAction(loadInstalledRelays));
     document.getElementById('relayCatalogSearch').addEventListener('input', resetRelayPage);

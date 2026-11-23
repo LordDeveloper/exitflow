@@ -658,8 +658,6 @@
         .relay-toasts { position: fixed; top: 16px; right: 16px; z-index: 150; display: grid; gap: 8px; width: min(340px, calc(100vw - 32px)); pointer-events: none; }
         .relay-toast { display: grid; gap: 5px; padding: 11px 14px; border: 1px solid #33795b; border-inline-start: 4px solid #50cf8c; border-radius: 10px; background: #142a24; color: #e1f8eb; box-shadow: 0 8px 24px #02080c88; overflow-wrap: anywhere; }
         .relay-toast span { color: #afd2c1; font-size: 12px; }
-        .relay-scheduler-status { padding: 3px 8px; border-radius: 999px; color: #c4d0e0; background: #2b3a4f; white-space: nowrap; }
-        .relay-scheduler-status[data-enabled="true"] { color: #c7fbe0; background: #216645; }
     </style>
 </head>
 <body>
@@ -792,12 +790,6 @@
                         <input type="checkbox" id="hideDisabledRelays">
                         <span class="switch-ui" aria-hidden="true"></span>
                         <span>مخفی‌کردن نودهای خاموش</span>
-                    </label>
-                    <label class="switch" for="autoRelayFailover">
-                        <input type="checkbox" id="autoRelayFailover" disabled>
-                        <span class="switch-ui" aria-hidden="true"></span>
-                        <span>تعویض خودکار روی CHR</span>
-                        <span id="relaySchedulerStatus" class="relay-scheduler-status" role="status">روتر متصل نیست</span>
                     </label>
                     <span id="relayCatalogStatus" role="status"></span>
                     <span id="relayManagementStatus" role="status"></span>
@@ -1073,10 +1065,6 @@
     let relayPingOrderDirty = false;
     let relayPingPaintPending = false;
     const LIVE_TEST_DISPLAY_MS = 60_000;
-    const PEER_PING_REFRESH_MS = 15_000;
-    const PEER_PING_BATCH_SIZE = 4;
-    let peerPingBatchRunning = false;
-    let peerPingTimer = null;
 
     let prevIfaceStats = new Map();
     let prevClientBytes = new Map();
@@ -1379,7 +1367,6 @@
         emptyClientCards();
         installedRelays = null;
         peerTrafficTests.clear();
-        void loadRelayScheduler();
         document.getElementById('wgTabCount').textContent = '0';
         renderRelayManagement();
         setHeal('');
@@ -2487,12 +2474,12 @@
         const bar = document.getElementById('pathTestResult');
         const barButton = document.getElementById('pathTestBtn');
         const selectedVal = document.getElementById('pathTestPeerValue');
-        if (bar && info && !info.endpoint && !info.automatic && selectedVal && (selectedVal.dataset.activePeer === name || selectedVal.value === name)) {
+        if (bar && info && !info.endpoint && selectedVal && (selectedVal.dataset.activePeer === name || selectedVal.value === name)) {
             bar.className = 'test-result ' + (info.state === 'ok' ? 'ok' : ['fail', 'error'].includes(info.state) ? 'bad' : 'muted');
             bar.textContent = name + ' — ' + info.text;
         }
         const selectedTest = peerTests.get(selectedVal?.value);
-        if (barButton) barButton.disabled = selectedTest?.state === 'running' && !selectedTest.automatic;
+        if (barButton) barButton.disabled = selectedTest?.state === 'running';
         if (info && info.state !== 'running' && info.avg !== info.previousAvg) relayPingOrderDirty = true;
         if (!relayPingPaintPending) {
             relayPingPaintPending = true;
@@ -2563,46 +2550,46 @@
         return ipOnly(peer?.['current-endpoint-address'] || peer?.['endpoint-address'] || '');
     }
 
-    async function testPeerPath(name, srcAddress, customTarget, customCount, automatic = false) {
+    async function testPeerPath(name, srcAddress, customTarget, customCount) {
         if (!monitoring) {
             setStatus('اول به روتر متصل شو.', true);
             return;
         }
         if (peerTests.get(name)?.state === 'running' || peerTrafficTests.get(name)?.running) {
-            if (!automatic) setStatus('تست این نود هنوز تمام نشده.', true);
+            setStatus('تست این نود هنوز تمام نشده.', true);
             return;
         }
         const endpoint = !customTarget;
         const iface = installedRelays?.get(name.startsWith('mv-wg-') ? name.slice(6) : name);
         const target = endpoint ? relayPingAddress(iface) : normalizePingTarget(customTarget);
         if (!target) {
-            if (!automatic) setStatus('آدرس مقصد پینگ در دسترس نیست.', true);
+            setStatus('آدرس مقصد پینگ در دسترس نیست.', true);
             return;
         }
         if (peerPingTargetBusy(target)) {
-            if (!automatic) setStatus('تست دیگری به همین مقصد در حال اجراست. بعد از پایان آن دوباره امتحان کن.', true);
+            setStatus('تست دیگری به همین مقصد در حال اجراست. بعد از پایان آن دوباره امتحان کن.', true);
             return;
         }
         const countNum = endpoint ? 1 : Math.min(20, Math.max(1, Number(customCount) || 3));
         const selectedVal = document.getElementById('pathTestPeerValue');
-        if (selectedVal && !endpoint && !automatic) selectedVal.dataset.activePeer = name;
+        if (selectedVal && !endpoint) selectedVal.dataset.activePeer = name;
         const previous = peerTests.get(name);
         const previousAvg = previous?.avg;
-        peerTests.set(name, { state: 'running', target, endpoint, automatic, avg: previousAvg, checkedAt: previous?.checkedAt, text: endpoint ? '' : `در حال فرستادن ${countNum} بسته به ${target}…` });
+        peerTests.set(name, { state: 'running', target, endpoint, avg: previousAvg, checkedAt: previous?.checkedAt, text: endpoint ? '' : `در حال فرستادن ${countNum} بسته به ${target}…` });
         paintPeerTest(name);
         const routed = { address: target, count: String(countNum) };
         if (!endpoint) routed.interface = name;
         if (srcAddress) routed['src-address'] = srcAddress;
         try {
-            const result = await apiFetch('/ping', 'POST', routed, automatic ? 12000 : 25000);
+            const result = await apiFetch('/ping', 'POST', routed, 25000);
             const summary = summarizePing(result);
             if (summary.received > 0) {
-                peerTests.set(name, { state: 'ok', endpoint, automatic, previousAvg, checkedAt: Date.now(), avg: summary.avg, text: `مسیر به ${target} باز است · ${summary.received} از ${summary.sent} جواب` + (summary.avg ? ' · ' + summary.avg : '') });
+                peerTests.set(name, { state: 'ok', endpoint, previousAvg, checkedAt: Date.now(), avg: summary.avg, text: `مسیر به ${target} باز است · ${summary.received} از ${summary.sent} جواب` + (summary.avg ? ' · ' + summary.avg : '') });
             } else {
-                peerTests.set(name, { state: 'fail', endpoint, automatic, previousAvg, checkedAt: Date.now(), text: endpoint ? `رلهٔ ${target} به پینگ پاسخ نداد` : `پینگ ${target} از این تونل پاسخی نگرفت` });
+                peerTests.set(name, { state: 'fail', endpoint, previousAvg, checkedAt: Date.now(), text: endpoint ? `رلهٔ ${target} به پینگ پاسخ نداد` : `پینگ ${target} از این تونل پاسخی نگرفت` });
             }
         } catch (err) {
-            peerTests.set(name, { state: 'error', endpoint, automatic, previousAvg, checkedAt: Date.now(), text: 'اجرای تست: ' + err.message });
+            peerTests.set(name, { state: 'error', endpoint, previousAvg, checkedAt: Date.now(), text: 'اجرای تست: ' + err.message });
         }
         paintPeerTest(name);
     }
@@ -3146,7 +3133,9 @@
             if (!document.getElementById('tabWireguard').hidden) {
                 void runRelayAction(loadInstalledRelays);
             }
-            void loadRelayScheduler().catch(error => { relayStatus.textContent = error.message; });
+            void disableLegacyRelayFailover().catch(error => {
+                relayStatus.textContent = 'توقف تعویض خودکار قدیمی روی CHR ناموفق بود. ' + error.message;
+            });
 
             const clock = document.getElementById('lastUpdateText');
             if (clock) clock.textContent = 'آخرین آپدیت: ' + new Date(now).toLocaleTimeString('fa-IR');
@@ -3177,14 +3166,11 @@
     function startLiveTimer() {
         stopLiveTimer();
         liveTimer = setInterval(() => { poll(); }, POLL_MS);
-        peerPingTimer = setInterval(scheduleVisiblePeerPing, PEER_PING_REFRESH_MS);
     }
 
     function stopLiveTimer() {
         if (liveTimer) clearInterval(liveTimer);
-        if (peerPingTimer) clearInterval(peerPingTimer);
         liveTimer = null;
-        peerPingTimer = null;
     }
 
     function resetSpeedWindow() {
@@ -4919,8 +4905,7 @@
         const usable = [ping, traffic].filter(test => test?.checkedAt
             && (test.state === 'ok' || test.state === 'fail')
             && now - test.checkedAt <= LIVE_TEST_DISPLAY_MS);
-        return usable.sort((a, b) => Number(Boolean(a.automatic)) - Number(Boolean(b.automatic))
-            || b.checkedAt - a.checkedAt)[0];
+        return usable.sort((a, b) => b.checkedAt - a.checkedAt)[0];
     }
 
     function relayHealthStatus(model, test, now) {
@@ -4933,40 +4918,6 @@
         if (!model) return null;
         return model.health.ok ? { state: 'ok', text: 'آنلاین' }
             : { state: 'problem', text: 'آفلاین' };
-    }
-
-    async function scheduleVisiblePeerPing() {
-        if (!monitoring || document.hidden || document.getElementById('tabWireguard').hidden
-            || busy || relayBusy || peerPingBatchRunning) return;
-        const interfaces = new Map([...(installedRelays?.values() || [])].map(iface => [iface.name, iface]));
-        const candidates = [];
-        for (const card of relayManagement.querySelectorAll('[data-relay-interface]')) {
-            if (!card.getClientRects().length) continue;
-            const name = card.dataset.relayInterface;
-            const iface = interfaces.get(name);
-            const target = relayPingAddress(iface);
-            if (!target || isTrue(iface.disabled) || peerPingTargetBusy(target)) continue;
-            const test = peerTests.get(name);
-            if (test?.state === 'running' || peerTrafficTests.get(name)?.running) continue;
-            candidates.push({ name, target, checkedAt: test?.checkedAt ?? 0 });
-        }
-        candidates.sort((a, b) => a.checkedAt - b.checkedAt);
-        const targets = new Set();
-        const batch = [];
-        for (const { name, target } of candidates) {
-            if (targets.has(target)) continue;
-            targets.add(target);
-            batch.push(name);
-            if (batch.length === PEER_PING_BATCH_SIZE) break;
-        }
-        if (!batch.length) return;
-
-        peerPingBatchRunning = true;
-        try {
-            await Promise.allSettled(batch.map(name => testPeerPath(name, undefined, undefined, undefined, true)));
-        } finally {
-            peerPingBatchRunning = false;
-        }
     }
 
     function updateRelayCardStats() {
@@ -4998,7 +4949,7 @@
                 health: model?.health.ageText || model?.health.text || '—',
                 clients: model ? String(model.clients.length) : '—',
                 latency: model?.disabled ? 'خاموش' : ping?.avg
-                    || (ping?.state === 'fail' ? 'بی‌پاسخ' : test?.state === 'running' ? (test.endpoint ? '—' : 'در حال تست…') : test?.state === 'error' ? 'خطای تست' : 'در صف تست'),
+                    || (ping?.state === 'fail' ? 'بی‌پاسخ' : test?.state === 'running' ? (test.endpoint ? '—' : 'در حال تست…') : test?.state === 'error' ? 'خطای تست' : '—'),
                 rxSpeed: model ? formatSpeed(model.stats.rxSpeed) : '—',
                 txSpeed: model ? formatSpeed(model.stats.txSpeed) : '—',
                 rx: model ? formatBytes(model.stats.rx) : '',
@@ -5164,7 +5115,6 @@
 
     let relaySettingsLoaded = false;
     function loadRelayPanel() {
-        void loadRelayScheduler().catch(error => { relayStatus.textContent = error.message; });
         renderRelayManagement();
         void refreshRelayCatalog(() => localDashboard('relays'),
             'فهرست رله‌های محلی در دسترس نیست.');
@@ -5270,72 +5220,19 @@
         document.getElementById('relayCountryLabel').focus();
     });
     document.getElementById('relayInstallFilter').addEventListener('change', resetRelayPage);
-    const failoverToggle = document.getElementById('autoRelayFailover');
-    const failoverBadge = document.getElementById('relaySchedulerStatus');
-    let relaySchedulerTask = null;
-    let relaySchedulerRequest = 0;
-    let relaySchedulerSaving = false;
-
-    function paintRelayScheduler(fallback) {
-        const enabled = Boolean(relaySchedulerTask && !isTrue(relaySchedulerTask.disabled));
-        failoverToggle.checked = enabled;
-        failoverBadge.dataset.enabled = String(enabled);
-        setText(failoverBadge, relaySchedulerTask ? (enabled ? 'فعال' : 'غیرفعال') : fallback);
-    }
-
-    async function loadRelayScheduler() {
-        if (monitoring && relaySchedulerSaving) return;
-        const request = ++relaySchedulerRequest;
-        failoverToggle.disabled = true;
-        if (!monitoring) {
-            relaySchedulerTask = null;
-            relaySchedulerSaving = false;
-            paintRelayScheduler('روتر متصل نیست');
-            return;
-        }
-        paintRelayScheduler('در حال بررسی…');
-        try {
-            const rows = await apiList('/system/scheduler?.proplist=.id,name,disabled');
-            if (request !== relaySchedulerRequest || !monitoring) return;
-            relaySchedulerTask = rows.find(row => row.name === 'exitflow-relay-failover') || null;
-            failoverToggle.title = relaySchedulerTask ? 'اجرا روی Scheduler روتر'
-                : 'ابتدا routeros/relay-failover.rsc را روی CHR ایمپورت کنید';
-            paintRelayScheduler('نصب نشده');
-        } catch (error) {
-            if (request !== relaySchedulerRequest) return;
-            paintRelayScheduler('وضعیت نامشخص');
-            throw error;
-        } finally {
-            if (request === relaySchedulerRequest) failoverToggle.disabled = !relaySchedulerTask;
+    async function disableLegacyRelayFailover() {
+        const router = getBaseUrl();
+        const rows = await apiList('/system/scheduler?.proplist=.id,name,disabled');
+        if (!monitoring || getBaseUrl() !== router) return;
+        const task = rows.find(row => row.name === 'exitflow-relay-failover' && !isTrue(row.disabled));
+        if (task) {
+            await apiFetch('/system/scheduler/' + assertId(task['.id']), 'PATCH', { disabled: 'yes' });
         }
     }
 
-    failoverToggle.addEventListener('change', async () => {
-        const task = relaySchedulerTask;
-        if (!task || !monitoring || relaySchedulerSaving) return;
-        const enabled = failoverToggle.checked;
-        const request = ++relaySchedulerRequest;
-        relaySchedulerSaving = true;
-        failoverToggle.disabled = true;
-        paintRelayScheduler('در حال ذخیره…');
-        try {
-            await apiFetch('/system/scheduler/' + assertId(task['.id']), 'PATCH', { disabled: enabled ? 'no' : 'yes' });
-            if (request !== relaySchedulerRequest || !monitoring) return;
-            relaySchedulerTask = { ...task, disabled: !enabled };
-            paintRelayScheduler('');
-            relayStatus.textContent = enabled ? 'تعویض خودکار روی CHR فعال شد' : 'تعویض خودکار روی CHR متوقف شد';
-        } catch (error) {
-            if (request === relaySchedulerRequest) relayStatus.textContent = error.message;
-        } finally {
-            if (request === relaySchedulerRequest) {
-                relaySchedulerSaving = false;
-                await loadRelayScheduler().catch(error => { relayStatus.textContent = error.message; });
-            }
-        }
-    });
     document.getElementById('hideDisabledRelays').addEventListener('change', resetRelayPage);
     document.getElementById('relayRouterSync').addEventListener('click', () => void runRelayAction(async () => {
-        await Promise.all([loadInstalledRelays(), loadRelayScheduler()]);
+        await loadInstalledRelays();
     }));
     document.getElementById('relayCatalogSearch').addEventListener('input', resetRelayPage);
     document.getElementById('relayPagePrev').addEventListener('click', () => {

@@ -3315,15 +3315,28 @@
             }
         });
     }
+    function availableWireGuardPort(interfaces) {
+        const used = new Set(interfaces.map(iface => Number(iface['listen-port'])));
+        for (let port = 49152; port <= 65535; port += 1) {
+            if (!used.has(port)) return String(port);
+        }
+        throw new Error('پورت محلی آزاد برای WireGuard پیدا نشد');
+    }
+
     async function setPeerDisabledState(ifaceName, disable) {
-        const ifaces = await apiList('/interface/wireguard?.proplist=.id,name,disabled');
+        const ifaces = await apiList('/interface/wireguard?.proplist=.id,name,listen-port');
         const target = ifaces.find((item) => item.name === ifaceName);
         if (!target || !target['.id']) {
             throw new Error(`اینترفیس ${ifaceName} در روتر پیدا نشد`);
         }
-        await apiFetch(`/interface/wireguard/${assertId(target['.id'])}`, 'PATCH', {
-            disabled: disable ? 'true' : 'false'
-        });
+        const changes = { disabled: disable ? 'true' : 'false' };
+        if (!disable && ifaceName.startsWith('mv-wg-')) {
+            const port = Number(target['listen-port']);
+            if (!port || ifaces.some(iface => iface.name !== ifaceName && Number(iface['listen-port']) === port)) {
+                changes['listen-port'] = availableWireGuardPort(ifaces);
+            }
+        }
+        await apiFetch(`/interface/wireguard/${assertId(target['.id'])}`, 'PATCH', changes);
     }
 
     async function restartPeerInterface(ifaceName) {
@@ -4762,7 +4775,7 @@
             card.append(stats, result);
             actions.append(
                 relayIcon(disabled ? 'فعال' : 'غیرفعال', 'power', 'info', () => mutateRelay(async () => {
-                    await apiFetch('/interface/wireguard/' + assertId(iface['.id']), 'PATCH', { disabled: disabled ? 'no' : 'yes' });
+                    await setPeerDisabledState(iface.name, !disabled);
                 }), relayBusy),
                 relayIcon('تست لحظه‌ای ارتباط', 'ping', 'info', () => {
                     void testPeerPath(iface.name);
@@ -4953,7 +4966,7 @@
         const { relay, address, key } = await localDashboard('provision', { name });
         const iface = 'mv-wg-' + relay.name;
         const [interfaces, peers, routes, tables, addresses] = await Promise.all([
-            apiList('/interface/wireguard?.proplist=.id,name,disabled'),
+            apiList('/interface/wireguard?.proplist=.id,name,disabled,listen-port'),
             apiList('/interface/wireguard/peers?.proplist=.id,interface,endpoint-address,current-endpoint-address,public-key'),
             apiList('/ip/route?.proplist=.id,dst-address,gateway,routing-table,disabled'),
             apiList('/routing/table?.proplist=.id,name'),
@@ -4971,10 +4984,11 @@
         }
         await ensureCatalogEndpointRoute(relay, interfaces, peers, routes);
         if (!interfaces.some(item => item.name === iface)) {
+            const listenPort = availableWireGuardPort(interfaces);
             // Do not expose the private key if RouterOS echoes it in an error.
             try {
                 await apiFetch('/interface/wireguard', 'PUT', {
-                    name: iface, 'private-key': key, mtu: 1320, disabled: 'yes'
+                    name: iface, 'private-key': key, 'listen-port': listenPort, mtu: 1320, disabled: 'yes'
                 });
             } catch {
                 throw new Error('ساخت اینترفیس WireGuard روی روتر ناموفق بود');
@@ -4993,8 +5007,7 @@
             await apiFetch('/routing/table', 'PUT', { name: iface, fib: 'yes' });
         }
         await ensurePeerDataPath(iface);
-        const created = (await apiList('/interface/wireguard?.proplist=.id,name')).find(row => row.name === iface);
-        await apiFetch('/interface/wireguard/' + assertId(created['.id']), 'PATCH', { disabled: 'no' });
+        await setPeerDisabledState(iface, false);
     }
 
     async function removeCatalogRelay(iface) {

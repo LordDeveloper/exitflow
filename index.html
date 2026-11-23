@@ -1069,6 +1069,7 @@
     let dhcpLeases = [];
     let visibleClientCount = 0;
     const peerTests = new Map();
+    const peerTrafficTests = new Map();
     let relayPingOrderDirty = false;
     let relayPingPaintPending = false;
     const LIVE_TEST_DISPLAY_MS = 60_000;
@@ -1376,6 +1377,7 @@
         resetSpeedWindow();
         emptyClientCards();
         installedRelays = null;
+        peerTrafficTests.clear();
         void loadRelayScheduler();
         document.getElementById('wgTabCount').textContent = '0';
         renderRelayManagement();
@@ -2500,6 +2502,41 @@
         }
     }
 
+    async function readPeerTraffic(name) {
+        const rows = await apiList('/interface?.proplist=name,rx-byte,tx-byte');
+        const iface = rows.find(row => row.name === name);
+        const rx = Number(iface?.['rx-byte']);
+        const tx = Number(iface?.['tx-byte']);
+        if (!Number.isFinite(rx) || !Number.isFinite(tx)) throw new Error('شمارنده‌های اینترفیس در دسترس نیست');
+        return { rx, tx };
+    }
+
+    async function testPeerTraffic(name) {
+        if (!monitoring || peerTrafficTests.get(name)?.running) return;
+        if (peerTests.get(name)?.state === 'running') {
+            setStatus('تست پینگ این نود هنوز تمام نشده.', true);
+            return;
+        }
+        peerTrafficTests.set(name, { running: true, text: 'تست ترافیک: در حال ارسال ۵ بستهٔ ۱۲۰۰ بایتی…' });
+        updateRelayCardStats();
+        try {
+            const before = await readPeerTraffic(name);
+            const result = await requestPeerPing({
+                address: '1.1.1.1', interface: name, 'routing-table': name, count: '5', size: '1200'
+            }, 15000);
+            const after = await readPeerTraffic(name);
+            const reply = summarizePing(result);
+            const tx = Math.max(0, after.tx - before.tx);
+            const rx = Math.max(0, after.rx - before.rx);
+            peerTrafficTests.set(name, {
+                text: `تست ترافیک: ${reply.received} پاسخ · ارسال ${formatBytes(tx)} · دریافت ${formatBytes(rx)} روی اینترفیس`
+            });
+        } catch (error) {
+            peerTrafficTests.set(name, { text: 'خطای تست ترافیک: ' + error.message });
+        }
+        updateRelayCardStats();
+    }
+
     function normalizePingTarget(raw) {
         const val = String(raw || '').trim();
         if (!val) return '1.1.1.1';
@@ -2525,8 +2562,8 @@
             setStatus('اول به روتر متصل شو.', true);
             return;
         }
-        if (peerTests.get(name)?.state === 'running') {
-            if (!automatic) setStatus('تست پینگ همین نود هنوز تمام نشده.', true);
+        if (peerTests.get(name)?.state === 'running' || peerTrafficTests.get(name)?.running) {
+            if (!automatic) setStatus('تست این نود هنوز تمام نشده.', true);
             return;
         }
         const target = normalizePingTarget(customTarget) || '1.1.1.1';
@@ -4512,6 +4549,7 @@
                     && (old.peer['endpoint-address'] !== item.peer['endpoint-address']
                         || old.peer['public-key'] !== item.peer['public-key']);
                 if (relayChanged && item.name.startsWith('mv-wg-')) notifyRelayChange(item.name, item.peer);
+                if (!sameNode || relayChanged) peerTrafficTests.delete(old.name);
                 if ((!sameNode || relayChanged) && peerTests.get(old.name)?.state !== 'running') {
                     peerTests.delete(old.name);
                 }
@@ -4539,6 +4577,7 @@
             restart: 'M20 7v5h-5 M20 12a8 8 0 1 0-2 5',
             remove: 'M3 6h18 M9 6V3h6v3 M6 6l1 15h10l1-15 M10 10v7 M14 10v7',
             edit: 'M4 16l-1 5 5-1L21 7l-4-4z M14 6l4 4',
+            traffic: 'M4 8h16 M15 3l5 5-5 5 M20 16H4 M9 11l-5 5 5 5',
             install: 'M12 3v12 M7 10l5 5 5-5 M4 16v5h16v-5'
         };
         const button = relayButton(label, style + ' relay-icon', action, disabled);
@@ -4794,13 +4833,20 @@
             result.className = 'relay-meta';
             result.dataset.relayResult = '';
             result.setAttribute('role', 'status');
-            card.append(stats, result);
+            const trafficResult = document.createElement('div');
+            trafficResult.className = 'relay-meta';
+            trafficResult.dataset.relayTrafficResult = '';
+            trafficResult.setAttribute('role', 'status');
+            card.append(stats, result, trafficResult);
             actions.append(
                 relayIcon(disabled ? 'فعال' : 'غیرفعال', 'power', 'info', () => mutateRelay(async () => {
                     await setPeerDisabledState(iface.name, !disabled);
                 }), relayBusy),
                 relayIcon('تست لحظه‌ای ارتباط', 'ping', 'info', () => {
                     void testPeerPath(iface.name);
+                }, disabled || relayBusy),
+                relayIcon('تست ترافیک', 'traffic', 'info', () => {
+                    void testPeerTraffic(iface.name);
                 }, disabled || relayBusy),
                 relayIcon('MTR و عیب‌یابی', 'trace', 'info', () => openDiagnoseModal(iface.name), relayBusy),
                 relayIcon('راه‌اندازی مجدد', 'restart', 'info', () => mutateRelay(() => restartPeerInterface(iface.name)), relayBusy || Boolean(disabled))
@@ -4876,7 +4922,7 @@
             const iface = interfaces.get(name);
             if (!iface || isTrue(iface.disabled)) continue;
             const test = peerTests.get(name);
-            if (test?.state === 'running' || now - (test?.checkedAt ?? -Infinity) < PEER_PING_REFRESH_MS) continue;
+            if (test?.state === 'running' || peerTrafficTests.get(name)?.running || now - (test?.checkedAt ?? -Infinity) < PEER_PING_REFRESH_MS) continue;
             void testPeerPath(name, undefined, undefined, 1, true);
         }
     }
@@ -4919,6 +4965,7 @@
             const result = test?.state === 'running' ? test.text
                 : recent ? `${new Date(test.checkedAt).toLocaleTimeString('fa-IR')} · ${test.text}` : '';
             setText(card.querySelector('[data-relay-result]'), result);
+            setText(card.querySelector('[data-relay-traffic-result]'), peerTrafficTests.get(name)?.text || '');
         }
     }
 

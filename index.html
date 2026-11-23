@@ -666,7 +666,7 @@
     <header class="page-head">
         <div>
             <h1>داشبورد Mullvad روی میکروتیک</h1>
-            <p>تونل دوتایی WireGuard · مسیر Mullvad از toTR و mv2tr · کلاینت‌ها روی mv-wg-*</p>
+            <p>تونل دوتایی WireGuard · مسیر Mullvad از exit و mv2tr · کلاینت‌ها روی mv-wg-*</p>
         </div>
         <div class="head-right">
             <div class="user-bar" id="userBar" hidden>
@@ -770,6 +770,16 @@
                         </label>
                         <button type="submit">ذخیرهٔ تنظیمات</button>
                     </form>
+                </section>
+                <section class="relay-settings-panel" aria-label="تنظیمات خروجی">
+                    <h3>تونل خروجی exit</h3>
+                    <form id="exitConfigForm" class="relay-settings">
+                        <label for="exitConfigFile">فایل کانفیگ WireGuard
+                            <input type="file" id="exitConfigFile" accept=".conf,.ini,text/plain" required>
+                        </label>
+                        <button type="submit">اعمال کانفیگ روی روتر</button>
+                    </form>
+                    <p id="exitConfigStatus" role="status"></p>
                 </section>
                 <div class="relay-toolbar">
                     <input id="relayCatalogSearch" type="search" aria-label="جستجوی رله" placeholder="جستجوی کشور، شهر، نام رله یا IP">
@@ -1589,11 +1599,11 @@
         try {
             const routes = await apiList('/ip/route?.proplist=dst-address,gateway,routing-table,disabled');
             const directRoutes = routes.some((route) => route['routing-table'] === 'main'
-                && route.gateway === 'toTR'
+                && route.gateway === 'exit'
                 && String(route['dst-address']).endsWith('/32')
                 && !isTrue(route.disabled));
             if (directRoutes) {
-                notes.push('مسیر مستقیم endpointهای Mullvad از toTR شناسایی شد');
+                notes.push('مسیر مستقیم endpointهای Mullvad از exit شناسایی شد');
             } else {
                 const upstream = await ensureUpstreamHandshake();
                 if (upstream) notes.push(upstream);
@@ -1633,7 +1643,7 @@
                 'dst-address-list': 'MVIPs',
                 'new-routing-mark': 'mv2tr',
                 passthrough: 'no',
-                comment: 'Route Client MVIPs to toTR'
+                comment: 'Route Client MVIPs to exit'
             });
             notes = 'قانون prerouting MVIPs/mv2tr ساخته شد';
         }
@@ -1653,7 +1663,7 @@
             passthrough: 'no',
             comment: 'MVIPs handshake via mv2tr'
         });
-        return notes ? notes + ' · هندشیک روتر از mv2tr/toTR خارج می‌شود' : 'هندشیک WireGuard روتر از این به بعد با mv2tr از toTR خارج می‌شود';
+        return notes ? notes + ' · هندشیک روتر از mv2tr/exit خارج می‌شود' : 'هندشیک WireGuard روتر از این به بعد با mv2tr از exit خارج می‌شود';
     }
 
     async function ensureMv2trDefault(routes) {
@@ -1664,19 +1674,19 @@
             try {
                 await apiFetch('/ip/route', 'PUT', {
                     'dst-address': '0.0.0.0/0',
-                    gateway: 'toTR',
+                    gateway: 'exit',
                     'routing-table': 'mv2tr',
-                    comment: 'default via toTR'
+                    comment: 'default via exit'
                 });
-                routes.push({ 'dst-address': '0.0.0.0/0', gateway: 'toTR', 'routing-table': 'mv2tr', disabled: 'false', active: 'true' });
-                notes.push('مسیر پیش‌فرض جدول mv2tr از toTR ساخته شد');
+                routes.push({ 'dst-address': '0.0.0.0/0', gateway: 'exit', 'routing-table': 'mv2tr', disabled: 'false', active: 'true' });
+                notes.push('مسیر پیش‌فرض جدول mv2tr از exit ساخته شد');
             } catch (err) {
                 if (!/already/i.test(err.message)) warnings.push('ساخت مسیر mv2tr ناموفق: ' + err.message);
             }
         } else if (!defaults.some((route) => isTrue(route.active))) {
             warnings.push('مسیر 0.0.0.0/0 در جدول mv2tr غیرفعال است؛ هندشیک Mullvad جواب نمی‌گیرد (TX بدون RX)');
-        } else if (!defaults.some((route) => String(route.gateway || '') === 'toTR')) {
-            warnings.push('مسیر پیش‌فرض mv2tr به toTR وصل نیست');
+        } else if (!defaults.some((route) => String(route.gateway || '') === 'exit')) {
+            warnings.push('مسیر پیش‌فرض mv2tr به exit وصل نیست');
         }
         return { notes, warnings };
     }
@@ -1709,13 +1719,13 @@
             apiList('/ip/route?.proplist=.id,dst-address,gateway,routing-table,active,disabled'),
             apiList('/ip/firewall/address-list?list=MVIPs&.proplist=.id,address,disabled').catch(() => [])
         ]);
-        const toTr = ifaces.find((item) => item.name === 'toTR' && !isTrue(item.disabled));
-        if (!toTr) {
-            warnings.push('اینترفیس toTR پیدا نشد؛ هندشیک Mullvad از این مسیر رد نمی‌شود');
+        const exitTunnel = ifaces.find((item) => item.name === 'exit' && !isTrue(item.disabled));
+        if (!exitTunnel) {
+            warnings.push('اینترفیس exit پیدا نشد؛ هندشیک Mullvad از این مسیر رد نمی‌شود');
             return { notes, warnings };
         }
-        if (toTr.running === 'false') {
-            warnings.push('اینترفیس toTR Running نیست؛ تا خودش هندشیک نگیرد Peerهای Mullvad هم RX نمی‌گیرند');
+        if (exitTunnel.running === 'false') {
+            warnings.push('اینترفیس exit Running نیست؛ تا خودش هندشیک نگیرد Peerهای Mullvad هم RX نمی‌گیرند');
         }
 
         const mv2trDefault = await ensureMv2trDefault(routes);
@@ -1773,9 +1783,9 @@
                 try {
                     await apiFetch('/ip/route', 'PUT', {
                         'dst-address': prefix,
-                        gateway: 'toTR',
+                        gateway: 'exit',
                         'routing-table': 'mv2tr',
-                        comment: 'MVIP via toTR'
+                        comment: 'MVIP via exit'
                     });
                     pendingFlush.push(ip);
                 } catch (err) {
@@ -1807,7 +1817,7 @@
                 await mapPool(stale, 8, async (row) => {
                     try { await deleteById('/ip/firewall/connection', row['.id']); } catch (err) { /* gone */ }
                 });
-                if (stale.length) notes.push(stale.length + ' اتصال قدیمی هندشیک پاک شد تا دوباره از toTR برود');
+                if (stale.length) notes.push(stale.length + ' اتصال قدیمی هندشیک پاک شد تا دوباره از exit برود');
             } catch (err) {
                 warnings.push('اتصال‌های قدیمی هندشیک پاک نشد: ' + err.message);
             }
@@ -1821,7 +1831,7 @@
         }
 
         if (uniqueIps.length) {
-            notes.push(uniqueIps.length + ' Endpoint Mullvad باید از جدول mv2tr و اینترفیس toTR خارج شود');
+            notes.push(uniqueIps.length + ' Endpoint Mullvad باید از جدول mv2tr و اینترفیس exit خارج شود');
         }
         return { notes, warnings };
     }
@@ -1871,7 +1881,7 @@
         const tunnelPeers = peers.filter((peer) => peer.interface === peerName);
         const tunnel = handshakeInfo(tunnelPeers);
         if (!tunnel.ok) {
-            warnings.push(`${peerName}: ${tunnel.text}. TX بدون RX یعنی هندشیک از toTR جواب نمی‌گیرد؛ تا زنده نشود کلاینت اینترنت ندارد`);
+            warnings.push(`${peerName}: ${tunnel.text}. TX بدون RX یعنی هندشیک از exit جواب نمی‌گیرد؛ تا زنده نشود کلاینت اینترنت ندارد`);
         }
 
         const endpointIp = ipOnly(endpointOf(tunnelPeers.find((peer) => endpointOf(peer)) || null));
@@ -1886,7 +1896,7 @@
                         address: endpointIp,
                         comment: 'endpoint ' + peerName
                     });
-                    notes.push('آدرس ' + endpointIp + ' به MVIPs اضافه شد تا هندشیک از toTR برود');
+                    notes.push('آدرس ' + endpointIp + ' به MVIPs اضافه شد تا هندشیک از exit برود');
                 } catch (err) {
                     if (!/already/i.test(err.message)) throw err;
                 }
@@ -2948,7 +2958,7 @@
                         disabled,
                         health,
                         stats,
-                        mangleBytes: item.name === 'toTR' ? upstreamMangleBytes : (mangleByPeer.get(item.name) || 0),
+                        mangleBytes: item.name === 'exit' ? upstreamMangleBytes : (mangleByPeer.get(item.name) || 0),
                         clients: clientsForPeer(item.name)
                     };
                 });
@@ -3017,7 +3027,7 @@
                 const ip = ipOnly(row.address);
                 const iface = String(row.interface || '');
                 if (!isPrivateLan(ip) || routerIps.has(ip)) return;
-                if (/^(mv-wg-|toTR|lo)/i.test(iface)) return;
+                if (/^(mv-wg-|exit$|toIR$|toTR$|lo)/i.test(iface)) return;
                 if (row.status === 'incomplete' || row.status === 'failed') return;
                 const existing = lanClients.get(ip);
                 if (existing) {
@@ -3752,17 +3762,17 @@
                 detail: `${hs.text}${hs.endpoint ? ' · Endpoint: ' + hs.endpoint : ''}`
             });
 
-            // 3. Upstream toTR & MVIPs
-            const toTr = ifaces.find((i) => i.name === 'toTR');
-            const toTrUp = toTr && !isTrue(toTr.disabled) && isTrue(toTr.running);
+            // 3. Upstream exit & MVIPs
+            const exitTunnel = ifaces.find((i) => i.name === 'exit');
+            const exitTunnelUp = exitTunnel && !isTrue(exitTunnel.disabled) && isTrue(exitTunnel.running);
             const epIp = ipOnly(hs.endpoint);
             const inMvips = epIp && addrLists.some((a) => a.list === 'MVIPs' && sameIp(a.address, epIp) && !isTrue(a.disabled));
             checks.push({
-                level: toTrUp ? (inMvips ? 'ok' : 'warn') : 'bad',
-                title: 'تونل بالادستی toTR و لیست MVIPs',
-                detail: !toTrUp ? 'اینترفیس toTR فعال نیست' : (inMvips ? `toTR فعال است و ${epIp} در MVIPs قرار دارد` : `toTR فعال است اما ${epIp || 'Endpoint'} در MVIPs نیست`)
+                level: exitTunnelUp ? (inMvips ? 'ok' : 'warn') : 'bad',
+                title: 'تونل بالادستی exit و لیست MVIPs',
+                detail: !exitTunnelUp ? 'اینترفیس exit فعال نیست' : (inMvips ? `exit فعال است و ${epIp} در MVIPs قرار دارد` : `exit فعال است اما ${epIp || 'Endpoint'} در MVIPs نیست`)
             });
-            if (toTrUp && !inMvips && epIp) hasFixableIssue = true;
+            if (exitTunnelUp && !inMvips && epIp) hasFixableIssue = true;
 
             // 4. Routing Rule priority (192.168.0.0/16 & peer lookup)
             const lanRuleIdx = rules.findIndex((r) => normPrefix(r['dst-address']) === '192.168.0.0/16' && r.action === 'lookup' && isMainTable(r) && !isTrue(r.disabled));
@@ -4111,15 +4121,15 @@
             const auditedRules = [];
 
             // --- تحلیل عوامل تاثیرگذار ---
-            const toTr = ifaces.find((i) => i.name === 'toTR');
-            const toTrUp = toTr && !isTrue(toTr.disabled) && isTrue(toTr.running);
+            const exitTunnel = ifaces.find((i) => i.name === 'exit');
+            const exitTunnelUp = exitTunnel && !isTrue(exitTunnel.disabled) && isTrue(exitTunnel.running);
             factors.push({
-                level: toTrUp ? 'ok' : 'bad',
-                factor: 'اینترفیس بالادستی (toTR)',
-                current: !toTr ? 'موجود نیست' : (isTrue(toTr.disabled) ? 'Disabled' : (toTrUp ? 'Up & Running' : 'Down / Not Running')),
-                analysis: toTrUp
+                level: exitTunnelUp ? 'ok' : 'bad',
+                factor: 'اینترفیس بالادستی (exit)',
+                current: !exitTunnel ? 'موجود نیست' : (isTrue(exitTunnel.disabled) ? 'Disabled' : (exitTunnelUp ? 'Up & Running' : 'Down / Not Running')),
+                analysis: exitTunnelUp
                     ? 'مسیر بالادستی فعال است و برای عبور هندشیک/ترافیک mv2tr آماده است.'
-                    : 'قطع یا غیرفعال بودن toTR باعث شکست هندشیک سرورهای WireGuard و قطع ارتباط می‌شود.',
+                    : 'قطع یا غیرفعال بودن exit باعث شکست هندشیک سرورهای WireGuard و قطع ارتباط می‌شود.',
                 actionHtml: '<span class="muted">-</span>'
             });
 
@@ -4522,7 +4532,7 @@
     }
 
     function isListedWireGuardPeer(item) {
-        return Boolean(item.name && item.name.toLowerCase() !== 'totr');
+        return Boolean(item.name && !['exit', 'toir', 'totr'].includes(item.name.toLowerCase()));
     }
 
     function syncInstalledRelays(rows, peers) {
@@ -5010,20 +5020,20 @@
 
     async function ensureCatalogEndpointRoute(relay, interfaces, peers, routes) {
         const prefix = relay.ip + '/32';
-        if (peers.some(peer => peer.interface === 'toTR'
+        if (peers.some(peer => peer.interface === 'exit'
             && [peer['endpoint-address'], peer['current-endpoint-address']].includes(relay.ip))) {
-            throw new Error('آدرس این رله با endpoint خود toTR یکی است');
+            throw new Error('آدرس این رله با endpoint خود exit یکی است');
         }
         const existingRoute = routes.some(route => route['routing-table'] === 'main'
             && normPrefix(route['dst-address']) === prefix && !isTrue(route.disabled));
-        if (!existingRoute && !interfaces.some(item => item.name === 'toTR' && !isTrue(item.disabled))) {
-            throw new Error('برای این endpoint مسیر /32 یا اینترفیس فعال toTR لازم است');
+        if (!existingRoute && !interfaces.some(item => item.name === 'exit' && !isTrue(item.disabled))) {
+            throw new Error('برای این endpoint مسیر /32 یا اینترفیس فعال exit لازم است');
         }
 
         if (!existingRoute) {
             await apiFetch('/ip/route', 'PUT', {
-                'dst-address': prefix, gateway: 'toTR', 'routing-table': 'main',
-                comment: 'Mullvad endpoint via toTR'
+                'dst-address': prefix, gateway: 'exit', 'routing-table': 'main',
+                comment: 'Mullvad endpoint via exit'
             });
         }
     }
@@ -5205,6 +5215,186 @@
         return monitoring ? `ذخیره شد؛ IPv4 روی ${confirmed} اینترفیس Mullvad تأیید شد`
             : 'محلی ذخیره شد؛ برای اعمال روی روتر متصل شوید و دوباره ذخیره کنید';
     }
+
+    function parseExitConfig(text) {
+        let section;
+        const sections = new Map();
+        for (const raw of text.split(/\r?\n/)) {
+            const line = raw.split('#', 1)[0].trim();
+            if (!line || line.startsWith(';')) continue;
+            const header = line.match(/^\[(Interface|Peer)\]$/i);
+            if (header) {
+                const name = header[1].toLowerCase();
+                if (sections.has(name)) throw new Error('کانفیگ باید یک Interface و یک Peer داشته باشد.');
+                section = new Map();
+                sections.set(name, section);
+                continue;
+            }
+            const field = line.match(/^([a-z]+)\s*=\s*(.+)$/i);
+            if (!section || !field) throw new Error('ساختار فایل کانفیگ WireGuard نامعتبر است.');
+            const key = field[1].toLowerCase();
+            if (section.has(key) && !['address', 'allowedips'].includes(key)) {
+                throw new Error('یک فیلد در کانفیگ تکرار شده است.');
+            }
+            section.set(key, section.has(key) ? section.get(key) + ',' + field[2] : field[2]);
+        }
+        const iface = sections.get('interface');
+        const peer = sections.get('peer');
+        const privateKey = iface?.get('privatekey');
+        const publicKey = peer?.get('publickey');
+        const psk = peer?.get('presharedkey');
+        const validKey = key => /^[A-Za-z0-9+/]{43}=$/.test(key || '');
+        if (!validKey(privateKey) || !validKey(publicKey) || (psk != null && !validKey(psk))) {
+            throw new Error('کلیدهای WireGuard در کانفیگ ناقص یا نامعتبرند.');
+        }
+        const parseAddress = (value, prefixRequired = true) => {
+            const match = value.match(/^([^/]+)(?:\/(\d{1,3}))?$/);
+            if (!match || (prefixRequired && match[2] == null)) throw new Error('آدرس IP یا پیشوند نامعتبر است.');
+            let ip = match[1];
+            const ipv6 = ip.includes(':');
+            if (ipv6 && /^[0-9a-f:.]+$/i.test(ip)) {
+                try {
+                    ip = new URL('http://[' + ip + ']').hostname.slice(1, -1);
+                } catch {
+                    throw new Error('آدرس IPv6 نامعتبر است.');
+                }
+            } else if (!isIpv4(ip)) {
+                throw new Error('آدرس IP نامعتبر است.');
+            }
+            const prefix = Number(match[2] ?? (ipv6 ? 128 : 32));
+            if (prefix > (ipv6 ? 128 : 32)) throw new Error('پیشوند IP نامعتبر است.');
+            return { address: ip + '/' + prefix, path: ipv6 ? '/ipv6/address' : '/ip/address' };
+        };
+        const parseList = (value, required) => {
+            if (!value) throw new Error('Address و AllowedIPs در کانفیگ الزامی هستند.');
+            return value.split(',').map(item => parseAddress(item.trim(), required));
+        };
+        const addresses = [...new Map(parseList(iface.get('address'), true).map(row => [row.address, row])).values()];
+        const allowed = parseList(peer.get('allowedips'), false).map(row => row.address);
+        const endpoint = peer.get('endpoint')?.match(/^(?:\[([0-9a-f:.]+)\]|([a-z0-9.-]+)):(\d{1,5})$/i);
+        const port = Number(endpoint?.[3]);
+        if (!endpoint || port < 1 || port > 65535) throw new Error('Endpoint یا پورت آن نامعتبر است.');
+        const host = endpoint[1] || endpoint[2];
+        if (endpoint[1]) parseAddress(host, false);
+        const settings = { 'private-key': privateKey };
+        for (const [field, property, minimum] of [['listenport', 'listen-port', 1], ['mtu', 'mtu', 68]]) {
+            const value = iface.get(field);
+            if (value == null) continue;
+            if (!/^\d{1,5}$/.test(value) || Number(value) < minimum || Number(value) > 65535) {
+                throw new Error('ListenPort یا MTU نامعتبر است.');
+            }
+            settings[property] = value;
+        }
+        const keepalive = peer.get('persistentkeepalive') ?? '0';
+        if (!/^\d{1,5}$/.test(keepalive) || Number(keepalive) > 65535) {
+            throw new Error('PersistentKeepalive نامعتبر است.');
+        }
+        return {
+            settings, addresses, host,
+            peer: {
+                'public-key': publicKey, 'preshared-key': psk || '',
+                'endpoint-address': host, 'endpoint-port': String(port),
+                'allowed-address': allowed.join(','), 'persistent-keepalive': keepalive + 's'
+            }
+        };
+    }
+
+    async function applyExitConfig(config) {
+        const ifPath = '/interface/wireguard';
+        const peerPath = ifPath + '/peers';
+        const interfaces = await apiList(ifPath + '?.proplist=.id,name');
+        const candidates = interfaces.filter(row => ['exit', 'toir', 'totr'].includes(row.name.toLowerCase()));
+        if (candidates.length !== 1) throw new Error('یک اینترفیس خروجی با نام exit، toIR یا toTR باید در روتر موجود باشد.');
+        const iface = candidates[0];
+        const ifacePath = ifPath + '/' + assertId(iface['.id']);
+        let endpointIp = config.host;
+        if (!isIpv4(endpointIp) && !endpointIp.includes(':')) {
+            const resolved = await apiFetch('/resolve', 'POST', { 'domain-name': endpointIp });
+            endpointIp = (Array.isArray(resolved) ? resolved[0]?.ret : resolved?.ret) || '';
+            if (!endpointIp) throw new Error('روتر نتوانست دامنهٔ Endpoint را به IP تبدیل کند.');
+        }
+        const [peers, routes] = await Promise.all([
+            apiList(peerPath + '?.proplist=.id,interface'),
+            apiList('/ip/route?.proplist=dst-address,gateway,disabled')
+        ]);
+        if (routes.some(route => route['dst-address'] === endpointIp + '/32'
+            && [iface.name, 'exit'].includes(route.gateway) && !isTrue(route.disabled))) {
+            throw new Error('IP خود Endpoint از مسیر تونل خروجی روت شده و باعث حلقه می‌شود.');
+        }
+        const currentPeers = peers.filter(row => row.interface === iface.name);
+        if (currentPeers.length > 1) throw new Error('اینترفیس خروجی بیش از یک Peer دارد.');
+        const families = ['/ip/address', '/ipv6/address'];
+        const currentAddresses = (await Promise.all(families.map(async path => {
+            try {
+                const rows = await apiList(path + '?.proplist=.id,interface,address,dynamic,disabled');
+                return rows.filter(row => row.interface === iface.name && !isTrue(row.dynamic)).map(row => ({ ...row, path }));
+            } catch (error) {
+                if (path === '/ipv6/address' && /404|unknown/i.test(error.message)
+                    && !config.addresses.some(row => row.path === path)) return [];
+                throw error;
+            }
+        }))).flat();
+
+        let stage = 'آدرس‌های تونل';
+        try {
+            for (const row of config.addresses) {
+                const current = currentAddresses.find(item => item.address === row.address);
+                if (!current) {
+                    const fields = { address: row.address, interface: iface.name };
+                    if (row.path === '/ipv6/address') fields.advertise = 'no';
+                    await apiFetch(row.path, 'PUT', fields);
+                }
+                else if (isTrue(current.disabled)) {
+                    await apiFetch(row.path + '/' + assertId(current['.id']), 'PATCH', { disabled: 'no' });
+                }
+            }
+            stage = 'کلید و نام اینترفیس';
+            await apiFetch(ifacePath, 'PATCH', { ...config.settings, name: 'exit' });
+            stage = 'تنظیمات Peer';
+            if (currentPeers.length) {
+                await apiFetch(peerPath + '/' + assertId(currentPeers[0]['.id']), 'PATCH', config.peer);
+            } else {
+                await apiFetch(peerPath, 'PUT', { ...config.peer, interface: 'exit' });
+            }
+            stage = 'حذف آدرس‌های قبلی';
+            for (const row of currentAddresses) {
+                if (!config.addresses.some(item => item.address === row.address)) await deleteById(row.path, row['.id']);
+            }
+        } catch {
+            throw new Error('اعمال کانفیگ در مرحلهٔ «' + stage + '» متوقف شد. ممکن است مراحل قبلی اعمال شده باشند.');
+        }
+    }
+
+    document.getElementById('exitConfigForm').addEventListener('submit', async event => {
+        event.preventDefault();
+        const form = event.currentTarget;
+        const field = document.getElementById('exitConfigFile');
+        const status = document.getElementById('exitConfigStatus');
+        const button = form.querySelector('button');
+        if (button.disabled) return;
+        if (!monitoring) {
+            status.textContent = 'ابتدا به روتر متصل شوید.';
+            return;
+        }
+        const file = field.files[0];
+        if (!file || file.size > 65536) {
+            status.textContent = 'یک فایل کانفیگ حداکثر ۶۴ کیلوبایتی انتخاب کنید.';
+            return;
+        }
+        button.disabled = true;
+        try {
+            const config = parseExitConfig(await file.text());
+            if (!window.confirm('کانفیگ و آدرس‌های ثابت تونل خروجی جایگزین می‌شوند و اتصال ممکن است موقتاً قطع شود. ادامه می‌دهید؟')) return;
+            status.textContent = 'در حال اعمال کانفیگ روی روتر…';
+            await applyExitConfig(config);
+            status.textContent = 'کانفیگ روی exit اعمال شد.';
+            field.value = '';
+        } catch (error) {
+            status.textContent = error.message;
+        } finally {
+            button.disabled = false;
+        }
+    });
 
     document.getElementById('relaySettings').addEventListener('submit', event => {
         event.preventDefault();

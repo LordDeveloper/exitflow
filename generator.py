@@ -12,7 +12,7 @@ OUTPUT_RESET_FILE = "reset-settings.rsc"
 
 PROXY = ""
 
-INTERFACE_NAME = "toTR"
+INTERFACE_NAME = "exit"
 
 def get_relays_data():
     storage = Path(__file__).resolve().parent / "storage"
@@ -44,8 +44,8 @@ def build_route_lines(relays, keep_installed_endpoints=True):
         "# RouterOS v7 - install direct endpoint routes before removing legacy policy",
         "{",
         f'    :local uplink "{INTERFACE_NAME}"',
-        '    :local routeTag "Mullvad endpoint via toTR"',
-        '    :if ([:len [/interface wireguard find where name=$uplink and running=yes and disabled=no]] != 1) do={ :error "toTR must be running" }',
+        '    :local routeTag "Mullvad endpoint via exit"',
+        '    :if ([:len [/interface wireguard find where name=$uplink and running=yes and disabled=no]] != 1) do={ :error "exit must be running" }',
         '    :local prefixes {' + ';'.join(f'"{ip}/32"' for ip in endpoints) + '}',
     ]
     if keep_installed_endpoints:
@@ -63,7 +63,7 @@ def build_route_lines(relays, keep_installed_endpoints=True):
         '        :foreach field in={"endpoint-address";"current-endpoint-address"} do={',
         '            :local ip [:toip [/interface wireguard peers get $peer $field]]',
         '            :if ([:typeof $ip] = "ip") do={',
-        '                :if ([:typeof [:find $prefixes ([:tostr $ip] . "/32")]] != "nil") do={ :error "A Mullvad endpoint overlaps the toTR endpoint" }',
+        '                :if ([:typeof [:find $prefixes ([:tostr $ip] . "/32")]] != "nil") do={ :error "A Mullvad endpoint overlaps the exit endpoint" }',
         '            }',
         '        }',
         '    }',
@@ -71,7 +71,7 @@ def build_route_lines(relays, keep_installed_endpoints=True):
         '        :if ([:len [/ip route find where routing-table=main and dst-address=$prefix and disabled=no and gateway!=$uplink]] > 0) do={ :error ("Conflicting main route for " . $prefix) }',
         '    }',
         '    :if ([:len [/ip firewall nat find where chain=srcnat and action=masquerade and out-interface=$uplink and disabled=no]] = 0) do={',
-        '        /ip firewall nat add chain=srcnat action=masquerade out-interface=$uplink comment="NAT for WireGuard toTR"',
+        '        /ip firewall nat add chain=srcnat action=masquerade out-interface=$uplink comment="NAT for WireGuard exit"',
         '    }',
         '    :foreach prefix in=$prefixes do={',
         '        :if ([:len [/ip route find where routing-table=main and dst-address=$prefix and gateway=$uplink and disabled=no]] = 0) do={',
@@ -85,11 +85,11 @@ def build_route_lines(relays, keep_installed_endpoints=True):
         '    /ip firewall filter remove [find where dynamic=no and chain=forward and action=accept and dst-address-list="MVIPs" and comment="Bypass FastTrack for MVIPs"]',
         '    /routing rule remove [find where table="mv2tr" and routing-mark="mv2tr" and action=lookup-only-in-table]',
         '    /routing rule remove [find where table="mv2tr" and action=lookup-only-in-table and comment="MVIP handshake via mv2tr"]',
-        '    /ip route remove [find where dynamic=no and routing-table="mv2tr" and gateway=$uplink and (comment="Mullvad Route via toTR" or comment="default via toTR" or comment="MVIP via toTR")]',
+        '    /ip route remove [find where dynamic=no and routing-table="mv2tr" and gateway=$uplink and (comment="Mullvad Route via toTR" or comment="default via toTR" or comment="MVIP via toTR" or comment="default via exit" or comment="MVIP via exit")]',
         '    :if (([:len [/ip firewall mangle find where dst-address-list="MVIPs" or src-address-list="MVIPs"]] = 0) and ([:len [/ip firewall filter find where dst-address-list="MVIPs" or src-address-list="MVIPs"]] = 0) and ([:len [/ip firewall nat find where dst-address-list="MVIPs" or src-address-list="MVIPs"]] = 0) and ([:len [/ip firewall raw find where dst-address-list="MVIPs" or src-address-list="MVIPs"]] = 0)) do={',
         '        /ip firewall address-list remove [find where list="MVIPs" and dynamic=no]',
         '    }',
-        '    :foreach route in=[/ip route find where routing-table=main and gateway=$uplink and dynamic=no and comment=$routeTag] do={',
+        '    :foreach route in=[/ip route find where routing-table=main and gateway=$uplink and dynamic=no and (comment=$routeTag or comment="Mullvad endpoint via toTR")] do={',
         '        :local prefix [:tostr [/ip route get $route dst-address]]',
         '        :if ([:typeof [:find $prefixes $prefix]] = "nil") do={ /ip route remove $route }',
         '    }',
@@ -120,7 +120,7 @@ def generate_reset_rsc(catalog):
         '    /ip firewall address-list remove [find where dynamic=no and list~"^mv-wg-"]',
         '    :put "Mullvad peer configuration cleared. Install peers from the Exitflow dashboard."',
     ]
-    lines = ["# Exitflow reset: clear Mullvad peers and keep only endpoint routes via toTR", *routes[:-1], *cleanup, "}"]
+    lines = ["# Exitflow reset: clear Mullvad peers and keep only endpoint routes via exit", *routes[:-1], *cleanup, "}"]
     Path(OUTPUT_RESET_FILE).write_text("\n".join(lines) + "\n", encoding="utf-8")
     return endpoint_count
 

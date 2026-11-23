@@ -2859,8 +2859,8 @@
         }
     }
 
-    async function loadWireguardSection(now = Date.now()) {
-        setSectionLoading('#tabWireguard .card', true);
+    async function loadWireguardSection(now = Date.now(), showLoading = false) {
+        if (showLoading) setSectionLoading('#tabWireguard .card', true);
         try {
             const [wgList, allIfaces, wgPeers, mangleRules, addrLists] = await Promise.all([
                 apiList('/interface/wireguard?.proplist=.id,name,comment,disabled,running'),
@@ -2981,12 +2981,12 @@
             }
             updateSummaryStatus();
         } finally {
-            setSectionLoading('#tabWireguard .card', false);
+            if (showLoading) setSectionLoading('#tabWireguard .card', false);
         }
     }
 
-    async function loadClientsSection(now = Date.now()) {
-        setSectionLoading('#tabClients .card', true);
+    async function loadClientsSection(now = Date.now(), showLoading = false) {
+        if (showLoading) setSectionLoading('#tabClients .card', true);
         try {
             const [leases, connections, arpRows, routerAddrs] = await Promise.all([
                 apiList('/ip/dhcp-server/lease?.proplist=.id,address,mac-address,host-name,comment,dynamic,status'),
@@ -3080,7 +3080,7 @@
             renderClientCards();
             updateSummaryStatus();
         } finally {
-            setSectionLoading('#tabClients .card', false);
+            if (showLoading) setSectionLoading('#tabClients .card', false);
         }
     }
 
@@ -3137,8 +3137,8 @@
             setBusy(false);
 
             const now = Date.now();
-            void loadClientsSection(now).catch((err) => setPollStatus('خطا در بخش کلاینت‌ها: ' + err.message));
-            void loadWireguardSection(now).catch((err) => setPollStatus('خطا در بخش WireGuard: ' + err.message));
+            void loadClientsSection(now, true).catch((err) => setPollStatus('خطا در بخش کلاینت‌ها: ' + err.message));
+            void loadWireguardSection(now, true).catch((err) => setPollStatus('خطا در بخش WireGuard: ' + err.message));
             void loadRouterHealthSection();
             if (!document.getElementById('tabWireguard').hidden) {
                 void runRelayAction(loadInstalledRelays);

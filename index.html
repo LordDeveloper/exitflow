@@ -2486,7 +2486,7 @@
         const bar = document.getElementById('pathTestResult');
         const barButton = document.getElementById('pathTestBtn');
         const selectedVal = document.getElementById('pathTestPeerValue');
-        if (bar && info && !info.automatic && selectedVal && (selectedVal.dataset.activePeer === name || selectedVal.value === name)) {
+        if (bar && info && !info.endpoint && !info.automatic && selectedVal && (selectedVal.dataset.activePeer === name || selectedVal.value === name)) {
             bar.className = 'test-result ' + (info.state === 'ok' ? 'ok' : ['fail', 'error'].includes(info.state) ? 'bad' : 'muted');
             bar.textContent = name + ' — ' + info.text;
         }
@@ -2582,12 +2582,12 @@
             if (!automatic) setStatus('تست دیگری به همین مقصد در حال اجراست. بعد از پایان آن دوباره امتحان کن.', true);
             return;
         }
-        const countNum = Math.min(20, Math.max(1, Number(customCount) || 3));
+        const countNum = endpoint ? 1 : Math.min(20, Math.max(1, Number(customCount) || 3));
         const selectedVal = document.getElementById('pathTestPeerValue');
-        if (selectedVal && !automatic) selectedVal.dataset.activePeer = name;
+        if (selectedVal && !endpoint && !automatic) selectedVal.dataset.activePeer = name;
         const previous = peerTests.get(name);
         const previousAvg = previous?.avg;
-        peerTests.set(name, { state: 'running', target, endpoint, automatic, avg: previousAvg, checkedAt: previous?.checkedAt, text: `در حال فرستادن ${countNum} بسته به ${target}…` });
+        peerTests.set(name, { state: 'running', target, endpoint, automatic, avg: previousAvg, checkedAt: previous?.checkedAt, text: endpoint ? '' : `در حال فرستادن ${countNum} بسته به ${target}…` });
         paintPeerTest(name);
         const routed = { address: target, count: String(countNum) };
         if (!endpoint) routed.interface = name;
@@ -4954,7 +4954,7 @@
             nextPeer = name;
             oldest = checkedAt;
         }
-        if (nextPeer) void testPeerPath(nextPeer, undefined, undefined, 5, true);
+        if (nextPeer) void testPeerPath(nextPeer, undefined, undefined, undefined, true);
     }
 
     function updateRelayCardStats() {
@@ -4986,7 +4986,7 @@
                 health: model?.health.ageText || model?.health.text || '—',
                 clients: model ? String(model.clients.length) : '—',
                 latency: model?.disabled ? 'خاموش' : ping?.avg
-                    || (ping?.state === 'fail' ? 'بی‌پاسخ' : test?.state === 'running' ? 'در حال تست…' : test?.state === 'error' ? 'خطای تست' : 'در صف تست'),
+                    || (ping?.state === 'fail' ? 'بی‌پاسخ' : test?.state === 'running' ? (test.endpoint ? '—' : 'در حال تست…') : test?.state === 'error' ? 'خطای تست' : 'در صف تست'),
                 rxSpeed: model ? formatSpeed(model.stats.rxSpeed) : '—',
                 txSpeed: model ? formatSpeed(model.stats.txSpeed) : '—',
                 rx: model ? formatBytes(model.stats.rx) : '',

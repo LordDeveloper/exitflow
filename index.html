@@ -2557,6 +2557,11 @@
         return null;
     }
 
+    function relayPingAddress(iface) {
+        const peer = iface?.peer;
+        return ipOnly(peer?.['current-endpoint-address'] || peer?.['endpoint-address'] || '');
+    }
+
     async function testPeerPath(name, srcAddress, customTarget, customCount, automatic = false) {
         if (!monitoring) {
             setStatus('اول به روتر متصل شو.', true);
@@ -2566,7 +2571,13 @@
             if (!automatic) setStatus('تست این نود هنوز تمام نشده.', true);
             return;
         }
-        const target = normalizePingTarget(customTarget) || '1.1.1.1';
+        const endpoint = !customTarget;
+        const iface = installedRelays?.get(name.startsWith('mv-wg-') ? name.slice(6) : name);
+        const target = endpoint ? relayPingAddress(iface) : normalizePingTarget(customTarget);
+        if (!target) {
+            if (!automatic) setStatus('آدرس مقصد پینگ در دسترس نیست.', true);
+            return;
+        }
         if (peerPingTargetBusy(target)) {
             if (!automatic) setStatus('تست دیگری به همین مقصد در حال اجراست. بعد از پایان آن دوباره امتحان کن.', true);
             return;
@@ -2576,20 +2587,21 @@
         if (selectedVal && !automatic) selectedVal.dataset.activePeer = name;
         const previous = peerTests.get(name);
         const previousAvg = previous?.avg;
-        peerTests.set(name, { state: 'running', target, automatic, avg: previousAvg, checkedAt: previous?.checkedAt, text: `در حال فرستادن ${countNum} بسته به ${target}…` });
+        peerTests.set(name, { state: 'running', target, endpoint, automatic, avg: previousAvg, checkedAt: previous?.checkedAt, text: `در حال فرستادن ${countNum} بسته به ${target}…` });
         paintPeerTest(name);
-        const routed = { address: target, count: String(countNum), interface: name };
+        const routed = { address: target, count: String(countNum) };
+        if (!endpoint) routed.interface = name;
         if (srcAddress) routed['src-address'] = srcAddress;
         try {
             const result = await apiFetch('/ping', 'POST', routed, automatic ? 12000 : 25000);
             const summary = summarizePing(result);
             if (summary.received > 0) {
-                peerTests.set(name, { state: 'ok', automatic, previousAvg, checkedAt: Date.now(), avg: summary.avg, text: `مسیر به ${target} باز است · ${summary.received} از ${summary.sent} جواب` + (summary.avg ? ' · ' + summary.avg : '') });
+                peerTests.set(name, { state: 'ok', endpoint, automatic, previousAvg, checkedAt: Date.now(), avg: summary.avg, text: `مسیر به ${target} باز است · ${summary.received} از ${summary.sent} جواب` + (summary.avg ? ' · ' + summary.avg : '') });
             } else {
-                peerTests.set(name, { state: 'fail', automatic, previousAvg, checkedAt: Date.now(), text: `پینگ ${target} از این تونل پاسخی نگرفت` });
+                peerTests.set(name, { state: 'fail', endpoint, automatic, previousAvg, checkedAt: Date.now(), text: endpoint ? `رلهٔ ${target} به پینگ پاسخ نداد` : `پینگ ${target} از این تونل پاسخی نگرفت` });
             }
         } catch (err) {
-            peerTests.set(name, { state: 'error', automatic, previousAvg, checkedAt: Date.now(), text: 'اجرای تست: ' + err.message });
+            peerTests.set(name, { state: 'error', endpoint, automatic, previousAvg, checkedAt: Date.now(), text: 'اجرای تست: ' + err.message });
         }
         paintPeerTest(name);
     }
@@ -4924,7 +4936,7 @@
 
     function scheduleVisiblePeerPing() {
         if (!monitoring || document.hidden || document.getElementById('tabWireguard').hidden
-            || busy || relayBusy || peerPingTargetBusy('1.1.1.1')) return;
+            || busy || relayBusy) return;
         const now = Date.now();
         const interfaces = new Map([...(installedRelays?.values() || [])].map(iface => [iface.name, iface]));
         let nextPeer;
@@ -4933,7 +4945,8 @@
             if (!card.getClientRects().length) continue;
             const name = card.dataset.relayInterface;
             const iface = interfaces.get(name);
-            if (!iface || isTrue(iface.disabled)) continue;
+            const target = relayPingAddress(iface);
+            if (!target || isTrue(iface.disabled) || peerPingTargetBusy(target)) continue;
             const test = peerTests.get(name);
             const checkedAt = test?.checkedAt ?? -Infinity;
             if (test?.state === 'running' || peerTrafficTests.get(name)?.running
@@ -4959,8 +4972,10 @@
             const model = models.get(name);
             const test = peerTests.get(name);
             const traffic = peerTrafficTests.get(name);
-            const latest = latestRelayConnectionTest(test, traffic, now);
-            const state = relayHealthStatus(model, latest || test, now);
+            const tunnelTest = test?.endpoint ? undefined : test;
+            const latest = latestRelayConnectionTest(tunnelTest, traffic, now);
+            const state = relayHealthStatus(model, latest || tunnelTest, now);
+            const ping = test?.endpoint ? test : latest || test;
             const badge = card.querySelector('[data-relay-state]');
             if (state) {
                 card.dataset.health = state.state;
@@ -4970,8 +4985,8 @@
             const metrics = {
                 health: model?.health.ageText || model?.health.text || '—',
                 clients: model ? String(model.clients.length) : '—',
-                latency: model?.disabled ? 'خاموش' : latest?.avg || (!latest && test?.avg)
-                    || ((latest || test)?.state === 'fail' ? 'بی‌پاسخ' : test?.state === 'running' ? 'در حال تست…' : test?.state === 'error' ? 'خطای تست' : 'در صف تست'),
+                latency: model?.disabled ? 'خاموش' : ping?.avg
+                    || (ping?.state === 'fail' ? 'بی‌پاسخ' : test?.state === 'running' ? 'در حال تست…' : test?.state === 'error' ? 'خطای تست' : 'در صف تست'),
                 rxSpeed: model ? formatSpeed(model.stats.rxSpeed) : '—',
                 txSpeed: model ? formatSpeed(model.stats.txSpeed) : '—',
                 rx: model ? formatBytes(model.stats.rx) : '',
@@ -4982,7 +4997,7 @@
             }
             const recent = test?.checkedAt && now - test.checkedAt <= LIVE_TEST_DISPLAY_MS;
             const result = test?.state === 'running' ? test.text
-                : recent && (!latest || latest === test) ? `${new Date(test.checkedAt).toLocaleTimeString('fa-IR')} · ${test.text}` : '';
+                : recent && (test.endpoint || !latest || latest === test) ? `${new Date(test.checkedAt).toLocaleTimeString('fa-IR')} · ${test.text}` : '';
             setText(card.querySelector('[data-relay-result]'), result);
             setText(card.querySelector('[data-relay-traffic-result]'), traffic?.text || '');
         }

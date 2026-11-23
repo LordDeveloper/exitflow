@@ -2529,6 +2529,9 @@
             const tx = Math.max(0, after.tx - before.tx);
             const rx = Math.max(0, after.rx - before.rx);
             peerTrafficTests.set(name, {
+                state: reply.received ? 'ok' : 'fail',
+                checkedAt: Date.now(),
+                avg: reply.avg,
                 text: `تست ترافیک: ${reply.received} پاسخ · ارسال ${formatBytes(tx)} · دریافت ${formatBytes(rx)} روی اینترفیس`
             });
         } catch (error) {
@@ -4899,6 +4902,14 @@
         return card;
     }
 
+    function latestRelayConnectionTest(ping, traffic, now) {
+        const usable = [ping, traffic].filter(test => test?.checkedAt
+            && (test.state === 'ok' || test.state === 'fail')
+            && now - test.checkedAt <= LIVE_TEST_DISPLAY_MS);
+        return usable.sort((a, b) => Number(Boolean(a.automatic)) - Number(Boolean(b.automatic))
+            || b.checkedAt - a.checkedAt)[0];
+    }
+
     function relayHealthStatus(model, test, now) {
         if (model?.disabled) return { state: 'problem', text: 'آفلاین · خاموش' };
         if (test?.state === 'running') return { state: 'checking', text: 'در حال تست…' };
@@ -4941,7 +4952,9 @@
             const name = card.dataset.relayInterface;
             const model = models.get(name);
             const test = peerTests.get(name);
-            const state = relayHealthStatus(model, test, now);
+            const traffic = peerTrafficTests.get(name);
+            const latest = latestRelayConnectionTest(test, traffic, now);
+            const state = relayHealthStatus(model, latest || test, now);
             const badge = card.querySelector('[data-relay-state]');
             if (state) {
                 card.dataset.health = state.state;
@@ -4951,8 +4964,8 @@
             const metrics = {
                 health: model?.health.ageText || model?.health.text || '—',
                 clients: model ? String(model.clients.length) : '—',
-                latency: model?.disabled ? 'خاموش' : test?.avg
-                    || (test?.state === 'running' ? 'در حال تست…' : test?.state === 'fail' ? 'بی‌پاسخ' : test?.state === 'error' ? 'خطای تست' : 'در صف تست'),
+                latency: model?.disabled ? 'خاموش' : latest?.avg || (!latest && test?.avg)
+                    || ((latest || test)?.state === 'fail' ? 'بی‌پاسخ' : test?.state === 'running' ? 'در حال تست…' : test?.state === 'error' ? 'خطای تست' : 'در صف تست'),
                 rxSpeed: model ? formatSpeed(model.stats.rxSpeed) : '—',
                 txSpeed: model ? formatSpeed(model.stats.txSpeed) : '—',
                 rx: model ? formatBytes(model.stats.rx) : '',
@@ -4963,9 +4976,9 @@
             }
             const recent = test?.checkedAt && now - test.checkedAt <= LIVE_TEST_DISPLAY_MS;
             const result = test?.state === 'running' ? test.text
-                : recent ? `${new Date(test.checkedAt).toLocaleTimeString('fa-IR')} · ${test.text}` : '';
+                : recent && (!latest || latest === test) ? `${new Date(test.checkedAt).toLocaleTimeString('fa-IR')} · ${test.text}` : '';
             setText(card.querySelector('[data-relay-result]'), result);
-            setText(card.querySelector('[data-relay-traffic-result]'), peerTrafficTests.get(name)?.text || '');
+            setText(card.querySelector('[data-relay-traffic-result]'), traffic?.text || '');
         }
     }
 

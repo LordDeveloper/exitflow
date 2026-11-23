@@ -532,9 +532,12 @@
         .relay-settings { margin: 12px 0; }
         #chrDhcpForm { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         #chrDhcpForm select { width: 100%; min-width: 0; }
-        .chr-dns { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px 18px; min-width: 0; border: 1px solid var(--border); border-radius: 8px; }
-        .chr-dns label { display: flex; align-items: center; }
-        #chrDhcpForm .chr-dns input { width: auto; }
+        .chr-dns { grid-column: 1 / -1; min-width: 0; }
+        .chr-dns summary { cursor: pointer; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; }
+        .chr-dns-menu { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; }
+        .chr-dns-options { display: grid; gap: 4px; max-height: 200px; overflow-y: auto; }
+        .chr-dns-options label { display: flex; align-items: center; padding: 4px; cursor: pointer; }
+        #chrDhcpForm .chr-dns-options input { width: auto; }
         @media (max-width: 520px) { #chrDhcpForm { grid-template-columns: minmax(0, 1fr); } }
         .relay-settings label { display: grid; gap: 6px; font-size: 13px; }
         .relay-toolbar { grid-template-columns: minmax(150px, 2fr) repeat(3, minmax(118px, 1fr)) auto; }
@@ -887,13 +890,21 @@
                 <label>Gateway<input name="gateway" list="chrDhcpGateways" required dir="ltr"><datalist id="chrDhcpGateways"></datalist></label>
                 <label>ابتدای محدودهٔ IP<input name="first" required disabled dir="ltr"></label>
                 <label>انتهای محدودهٔ IP<input name="last" required disabled dir="ltr"></label>
-                <fieldset class="chr-dns">
-                    <legend>DNS</legend>
-                    <label><input type="checkbox" name="dns" value="8.8.8.8,8.8.4.4"> Google DNS</label>
-                    <label><input type="checkbox" name="dns" value="1.1.1.1,1.0.0.1"> Cloudflare DNS</label>
-                    <label><input type="checkbox" name="dns" value="9.9.9.9,149.112.112.112"> Quad9 DNS</label>
-                    <label><input type="checkbox" name="dns" value="208.67.222.222,208.67.220.220"> OpenDNS</label>
-                </fieldset>
+                <details class="chr-dns" id="chrDnsPicker">
+                    <summary id="chrDnsSummary">انتخاب DNS</summary>
+                    <div class="chr-dns-menu">
+                        <label>DNS سفارشی
+                            <input id="chrDnsCustom" dir="ltr" placeholder="IPv4 + Enter" autocomplete="off">
+                        </label>
+                        <span id="chrDnsError" role="status"></span>
+                        <div class="chr-dns-options" id="chrDnsOptions" role="group" aria-label="سرویس‌های DNS">
+                            <label><input type="checkbox" name="dns" value="8.8.8.8,8.8.4.4"> <bdi>Google DNS</bdi></label>
+                            <label><input type="checkbox" name="dns" value="1.1.1.1,1.0.0.1"> <bdi>Cloudflare DNS</bdi></label>
+                            <label><input type="checkbox" name="dns" value="9.9.9.9,149.112.112.112"> <bdi>Quad9 DNS</bdi></label>
+                            <label><input type="checkbox" name="dns" value="208.67.222.222,208.67.220.220"> <bdi>OpenDNS</bdi></label>
+                        </div>
+                    </div>
+                </details>
                 <button type="submit" id="chrDhcpPrepare" disabled>ساخت DHCP غیرفعال</button>
             </form>
             <p><label><input type="checkbox" id="chrDhcpReady"> دسترسی با IP ثابت را آزمایش کرده‌ام و DHCP مودم را خاموش کرده‌ام.</label></p>
@@ -2980,6 +2991,59 @@
 
     chrDhcpRefresh.addEventListener('click', () => void runChrDhcpAction());
     chrDhcpModem.addEventListener('change', () => void runChrDhcpAction());
+    const chrDnsPicker = document.getElementById('chrDnsPicker');
+    const chrDnsInput = document.getElementById('chrDnsCustom');
+    const chrDnsOptions = document.getElementById('chrDnsOptions');
+    const chrDnsSummary = document.getElementById('chrDnsSummary');
+    const chrDnsError = document.getElementById('chrDnsError');
+
+    function updateChrDnsSummary() {
+        const selected = [...chrDnsOptions.querySelectorAll('input:checked')];
+        chrDnsSummary.textContent = selected.length ? 'DNS · ' : 'انتخاب DNS';
+        if (selected.length) {
+            const names = document.createElement('bdi');
+            names.textContent = selected.map(input => input.nextElementSibling.textContent).join('، ');
+            chrDnsSummary.append(names);
+        }
+    }
+
+    chrDnsOptions.addEventListener('change', updateChrDnsSummary);
+    chrDnsInput.addEventListener('input', () => { chrDnsError.textContent = ''; });
+    chrDnsInput.addEventListener('keydown', event => {
+        if (event.key !== 'Enter' || event.isComposing) return;
+        event.preventDefault();
+        const raw = chrDnsInput.value.trim();
+        if (!isIpv4(raw)) {
+            chrDnsError.textContent = 'یک آدرس IPv4 معتبر وارد کنید.';
+            return;
+        }
+        const address = raw.split('.').map(Number).join('.');
+        let option = [...chrDnsOptions.querySelectorAll('input')].find(input => input.value === address);
+        if (!option) {
+            const label = document.createElement('label');
+            option = document.createElement('input');
+            option.type = 'checkbox';
+            option.name = 'dns';
+            option.value = address;
+            const text = document.createElement('bdi');
+            text.textContent = address;
+            label.append(option, text);
+            chrDnsOptions.append(label);
+        }
+        option.checked = true;
+        chrDnsInput.value = '';
+        chrDnsError.textContent = '';
+        updateChrDnsSummary();
+    });
+    chrDnsPicker.addEventListener('keydown', event => {
+        if (event.key !== 'Escape' || !chrDnsPicker.open) return;
+        chrDnsPicker.open = false;
+        chrDnsSummary.focus();
+    });
+    document.addEventListener('click', event => {
+        if (chrDnsPicker.open && !chrDnsPicker.contains(event.target)) chrDnsPicker.open = false;
+    });
+
     chrDhcpInterface.addEventListener('change', updateChrGateway);
     chrGateway.addEventListener('input', updateChrGateway);
     chrDhcpForm.addEventListener('submit', event => {

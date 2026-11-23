@@ -5304,9 +5304,9 @@
         const peerPath = ifPath + '/peers';
         const interfaces = await apiList(ifPath + '?.proplist=.id,name');
         const candidates = interfaces.filter(row => ['exit', 'toir', 'totr'].includes(row.name.toLowerCase()));
-        if (candidates.length !== 1) throw new Error('یک اینترفیس خروجی با نام exit، toIR یا toTR باید در روتر موجود باشد.');
+        if (candidates.length > 1) throw new Error('چند اینترفیس خروجی با نام‌های exit، toIR یا toTR پیدا شد. فقط یکی باید موجود باشد.');
         const iface = candidates[0];
-        const ifacePath = ifPath + '/' + assertId(iface['.id']);
+        const ifaceName = iface?.name ?? 'exit';
         let endpointIp = config.host;
         if (!isIpv4(endpointIp) && !endpointIp.includes(':')) {
             const resolved = await apiFetch('/resolve', 'POST', { 'domain-name': endpointIp });
@@ -5318,16 +5318,16 @@
             apiList('/ip/route?.proplist=dst-address,gateway,disabled')
         ]);
         if (routes.some(route => route['dst-address'] === endpointIp + '/32'
-            && [iface.name, 'exit'].includes(route.gateway) && !isTrue(route.disabled))) {
+            && [ifaceName, 'exit'].includes(route.gateway) && !isTrue(route.disabled))) {
             throw new Error('IP خود Endpoint از مسیر تونل خروجی روت شده و باعث حلقه می‌شود.');
         }
-        const currentPeers = peers.filter(row => row.interface === iface.name);
+        const currentPeers = peers.filter(row => row.interface === ifaceName);
         if (currentPeers.length > 1) throw new Error('اینترفیس خروجی بیش از یک Peer دارد.');
         const families = ['/ip/address', '/ipv6/address'];
         const currentAddresses = (await Promise.all(families.map(async path => {
             try {
                 const rows = await apiList(path + '?.proplist=.id,interface,address,dynamic,disabled');
-                return rows.filter(row => row.interface === iface.name && !isTrue(row.dynamic)).map(row => ({ ...row, path }));
+                return rows.filter(row => row.interface === ifaceName && !isTrue(row.dynamic)).map(row => ({ ...row, path }));
             } catch (error) {
                 if (path === '/ipv6/address' && /404|unknown/i.test(error.message)
                     && !config.addresses.some(row => row.path === path)) return [];
@@ -5335,12 +5335,16 @@
             }
         }))).flat();
 
-        let stage = 'آدرس‌های تونل';
+        let stage = 'ساخت اینترفیس خروجی';
         try {
+            if (!iface) {
+                await apiFetch(ifPath, 'PUT', { ...config.settings, name: 'exit' });
+            }
+            stage = 'آدرس‌های تونل';
             for (const row of config.addresses) {
                 const current = currentAddresses.find(item => item.address === row.address);
                 if (!current) {
-                    const fields = { address: row.address, interface: iface.name };
+                    const fields = { address: row.address, interface: ifaceName };
                     if (row.path === '/ipv6/address') fields.advertise = 'no';
                     await apiFetch(row.path, 'PUT', fields);
                 }
@@ -5348,8 +5352,10 @@
                     await apiFetch(row.path + '/' + assertId(current['.id']), 'PATCH', { disabled: 'no' });
                 }
             }
-            stage = 'کلید و نام اینترفیس';
-            await apiFetch(ifacePath, 'PATCH', { ...config.settings, name: 'exit' });
+            if (iface) {
+                stage = 'کلید و نام اینترفیس';
+                await apiFetch(ifPath + '/' + assertId(iface['.id']), 'PATCH', { ...config.settings, name: 'exit' });
+            }
             stage = 'تنظیمات Peer';
             if (currentPeers.length) {
                 await apiFetch(peerPath + '/' + assertId(currentPeers[0]['.id']), 'PATCH', config.peer);

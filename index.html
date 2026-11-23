@@ -4984,22 +4984,28 @@
         });
     }
 
+    const relayEndpointRouteTag = 'Exitflow Mullvad endpoint: ';
+
     async function changeCityRelay(iface, name) {
         const relay = relayCatalog.find(item => item.name === name);
-        if (!relay || !iface.peer) throw new Error('برای تغییر رله باید اینترفیس دقیقاً یک peer داشته باشد');
+        if (!relay) throw new Error('برای تغییر رله باید اینترفیس دقیقاً یک peer داشته باشد');
         const [interfaces, peers, routes] = await Promise.all([
             apiList('/interface/wireguard?.proplist=.id,name,disabled'),
             apiList('/interface/wireguard/peers?.proplist=.id,interface,endpoint-address,current-endpoint-address,public-key'),
             apiList('/ip/route?.proplist=.id,dst-address,gateway,routing-table,disabled')
         ]);
+        const currentPeers = peers.filter(peer => peer.interface === iface.name);
+        if (currentPeers.length !== 1) throw new Error('برای تغییر رله باید اینترفیس دقیقاً یک peer داشته باشد');
+        const [currentPeer] = currentPeers;
         if (peers.some(peer => peer.interface !== iface.name && peer['endpoint-address'] === relay.ip
             && peer['public-key'] === relay.publicKey)) {
             throw new Error('این رله از قبل روی اینترفیس دیگری نصب شده است');
         }
-        await ensureCatalogEndpointRoute(relay, interfaces, peers, routes);
-        await apiFetch('/interface/wireguard/peers/' + assertId(iface.peer['.id']), 'PATCH', {
+        await ensureCatalogEndpointRoute(relay, iface.name, interfaces, peers, routes);
+        await apiFetch('/interface/wireguard/peers/' + assertId(currentPeer['.id']), 'PATCH', {
             'public-key': relay.publicKey, 'endpoint-address': relay.ip, 'endpoint-port': '51820'
         });
+        await removeUnusedRelayEndpointRoutes(iface.name, [currentPeer], relay.ip);
     }
 
     async function runRelayAction(action) {
@@ -5018,23 +5024,46 @@
         }
     }
 
-    async function ensureCatalogEndpointRoute(relay, interfaces, peers, routes) {
+    async function ensureCatalogEndpointRoute(relay, ifaceName, interfaces, peers, routes) {
         const prefix = relay.ip + '/32';
         if (peers.some(peer => peer.interface === 'exit'
             && [peer['endpoint-address'], peer['current-endpoint-address']].includes(relay.ip))) {
             throw new Error('آدرس این رله با endpoint خود exit یکی است');
         }
-        const existingRoute = routes.some(route => route['routing-table'] === 'main'
+        const enabledRoutes = routes.filter(route => route['routing-table'] === 'main'
             && normPrefix(route['dst-address']) === prefix && !isTrue(route.disabled));
-        if (!existingRoute && !interfaces.some(item => item.name === 'exit' && !isTrue(item.disabled))) {
-            throw new Error('برای این endpoint مسیر /32 یا اینترفیس فعال exit لازم است');
+        if (enabledRoutes.some(route => route.gateway !== 'exit')) {
+            throw new Error('برای ' + prefix + ' در جدول main مسیر متعارض با gateway دیگری وجود دارد.');
         }
-
-        if (!existingRoute) {
+        if (!interfaces.some(item => item.name === 'exit' && !isTrue(item.disabled))) {
+            throw new Error('برای مسیریابی endpoint رله، اینترفیس exit باید فعال باشد.');
+        }
+        if (!enabledRoutes.length) {
             await apiFetch('/ip/route', 'PUT', {
                 'dst-address': prefix, gateway: 'exit', 'routing-table': 'main',
-                comment: 'Mullvad endpoint via exit'
+                comment: relayEndpointRouteTag + ifaceName
             });
+        }
+    }
+
+    async function removeUnusedRelayEndpointRoutes(ifaceName, oldPeers, keepIp) {
+        const [peers, routes] = await Promise.all([
+            apiList('/interface/wireguard/peers?.proplist=interface,endpoint-address,current-endpoint-address'),
+            apiList('/ip/route?.proplist=.id,dst-address,gateway,routing-table,dynamic,comment')
+        ]);
+        const previousIps = new Set(oldPeers.flatMap(peer => [peer['endpoint-address'], peer['current-endpoint-address']]));
+        const usedIps = new Set(peers.filter(peer => peer.interface !== ifaceName)
+            .flatMap(peer => [peer['endpoint-address'], peer['current-endpoint-address']]));
+        for (const route of routes) {
+            if (route['routing-table'] !== 'main' || route.gateway !== 'exit' || isTrue(route.dynamic)) continue;
+            const prefix = normPrefix(route['dst-address']);
+            const ip = prefix.split('/')[0];
+            if (prefix !== ip + '/32' || ip === keepIp || usedIps.has(ip)) continue;
+            const tag = route.comment || '';
+            const managed = tag.startsWith(relayEndpointRouteTag) || tag === 'Mullvad endpoint via exit';
+            if (tag === relayEndpointRouteTag + ifaceName || (managed && previousIps.has(ip))) {
+                await deleteById('/ip/route', route['.id']);
+            }
         }
     }
 
@@ -5058,7 +5087,12 @@
             && peer['public-key'] === relay.publicKey)) {
             throw new Error('این رله از قبل روی اینترفیس دیگری نصب شده است');
         }
-        await ensureCatalogEndpointRoute(relay, interfaces, peers, routes);
+        const existingPeers = peers.filter(peer => peer.interface === iface);
+        if (existingPeers.length && (existingPeers.length !== 1
+            || existingPeers[0]['endpoint-address'] !== relay.ip || existingPeers[0]['public-key'] !== relay.publicKey)) {
+            throw new Error('این اینترفیس از قبل Peer دیگری دارد. از گزینهٔ ویرایش رله استفاده کنید.');
+        }
+        await ensureCatalogEndpointRoute(relay, iface, interfaces, peers, routes);
         if (!interfaces.some(item => item.name === iface)) {
             const listenPort = availableWireGuardPort(interfaces);
             // Do not expose the private key if RouterOS echoes it in an error.
@@ -5073,7 +5107,7 @@
         if (!addresses.some(row => row.interface === iface && row.address === address)) {
             await apiFetch('/ip/address', 'PUT', { address, interface: iface });
         }
-        if (!peers.some(peer => peer.interface === iface)) {
+        if (!existingPeers.length) {
             await apiFetch('/interface/wireguard/peers', 'PUT', {
                 interface: iface, 'public-key': relay.publicKey, 'endpoint-address': relay.ip,
                 'endpoint-port': '51820', 'allowed-address': '0.0.0.0/0', 'persistent-keepalive': '25s'
@@ -5096,13 +5130,16 @@
             ['/ip/route', 'routing-table,dynamic', row => row['routing-table'] === name && !isTrue(row.dynamic)],
             ['/routing/table', 'name', row => row.name === name],
             ['/ip/firewall/address-list', 'list,dynamic', row => row.list === name && !isTrue(row.dynamic)],
-            ['/interface/wireguard/peers', 'interface', row => row.interface === name],
+            ['/interface/wireguard/peers', 'interface,endpoint-address,current-endpoint-address', row => row.interface === name],
             ['/ip/address', 'interface,dynamic', row => row.interface === name && !isTrue(row.dynamic)]
         ];
         const records = await Promise.all(targets.map(([path, fields]) => apiList(path + '?.proplist=.id,' + fields)));
+        const peerIndex = targets.findIndex(([path]) => path === '/interface/wireguard/peers');
+        const oldPeers = records[peerIndex].filter(targets[peerIndex][2]);
         for (const [index, [path, , matches]] of targets.entries()) {
             for (const row of records[index].filter(matches)) await deleteById(path, row['.id']);
         }
+        await removeUnusedRelayEndpointRoutes(name, oldPeers);
         await deleteById('/interface/wireguard', iface['.id']);
     }
 

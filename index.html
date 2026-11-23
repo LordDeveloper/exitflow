@@ -579,7 +579,6 @@
         .relay-city:has(> .relay-peer[data-health="problem"]) .relay-city-header { background: #41232c; }
         .relay-peer[data-health="problem"] .relay-state { background: #552633; color: #ffc6c9; }
         .relay-peer[data-health="checking"] .relay-state { background: #463b27; color: #ffe0a1; }
-        .relay-peer[data-health="problem"] [data-relay-result] { color: #ffc6c9; }
         .relay-peer + .relay-peer { border-top: 1px solid var(--border); }
         .relay-meta { color: var(--muted); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
         .relay-meta:empty { display: none; }
@@ -657,6 +656,7 @@
         .relay-toolbar > * { min-width: 0; }
         .relay-toasts { position: fixed; top: 16px; right: 16px; z-index: 150; display: grid; gap: 8px; width: min(340px, calc(100vw - 32px)); pointer-events: none; }
         .relay-toast { display: grid; gap: 5px; padding: 11px 14px; border: 1px solid #33795b; border-inline-start: 4px solid #50cf8c; border-radius: 10px; background: #142a24; color: #e1f8eb; box-shadow: 0 8px 24px #02080c88; overflow-wrap: anywhere; }
+        .relay-toast[data-failed="true"] { border-color: #a94a55; border-inline-start-color: #f87171; }
         .relay-toast span { color: #afd2c1; font-size: 12px; }
     </style>
 </head>
@@ -2525,7 +2525,7 @@
             setStatus('تست دیگری به همین مقصد در حال اجراست. بعد از پایان آن دوباره امتحان کن.', true);
             return;
         }
-        peerTrafficTests.set(name, { running: true, target, text: 'تست ترافیک: در حال ارسال ۵ بستهٔ ۱۲۰۰ بایتی…' });
+        peerTrafficTests.set(name, { running: true, target });
         updateRelayCardStats();
         try {
             const before = await readPeerTraffic(name);
@@ -2540,11 +2540,13 @@
                 state: reply.received ? 'ok' : 'fail',
                 checkedAt: Date.now(),
                 avg: reply.avg,
-                text: `تست ترافیک: ${reply.received} پاسخ · ارسال ${formatBytes(tx)} · دریافت ${formatBytes(rx)} روی اینترفیس`
+                text: `${reply.received} پاسخ · ارسال ${formatBytes(tx)} · دریافت ${formatBytes(rx)} روی اینترفیس`
             });
         } catch (error) {
-            peerTrafficTests.set(name, { text: 'خطای تست ترافیک: ' + error.message });
+            peerTrafficTests.set(name, { state: 'error', text: 'اجرای تست: ' + error.message });
         }
+        const test = peerTrafficTests.get(name);
+        showRelayToast('تست ترافیک · ' + name, test.text, test.state !== 'ok');
         updateRelayCardStats();
     }
 
@@ -2601,6 +2603,8 @@
         } catch (err) {
             peerTests.set(name, { state: 'error', endpoint, previousAvg, checkedAt: Date.now(), text: 'اجرای تست: ' + err.message });
         }
+        const test = peerTests.get(name);
+        showRelayToast('تست پینگ · ' + name, test.text, test.state !== 'ok');
         paintPeerTest(name);
     }
 
@@ -4516,15 +4520,20 @@
     function notifyRelayChange(node, peer) {
         const end = peer['endpoint-address'];
         const relay = relayCatalog.find(item => item.ip === end && item.publicKey === peer['public-key']);
+        showRelayToast(`رلهٔ نود ${node} تغییر کرد`, relay ? `${relay.name} · ${end}` : end);
+    }
+
+    function showRelayToast(heading, message, failed = false) {
         const region = document.getElementById('relayToasts');
         const toast = document.createElement('div');
         toast.className = 'relay-toast';
         toast.dir = 'rtl';
+        toast.dataset.failed = String(failed);
         const title = document.createElement('strong');
-        title.textContent = `رلهٔ نود ${node} تغییر کرد`;
+        title.textContent = heading;
         const detail = document.createElement('span');
-        detail.dir = 'ltr';
-        detail.textContent = relay ? `${relay.name} · ${end}` : end;
+        detail.dir = 'auto';
+        detail.textContent = message;
         toast.append(title, detail);
         if (region.childElementCount >= 4) region.firstElementChild.remove();
         region.append(toast);
@@ -4841,15 +4850,7 @@
                 <div><strong data-metric="latency">—</strong><span>پینگ</span></div>
                 <div class="relay-rx"><strong data-metric="rxSpeed">—</strong><span>↓ دریافت</span><small data-metric="rx"></small></div>
                 <div class="relay-tx"><strong data-metric="txSpeed">—</strong><span>↑ ارسال</span><small data-metric="tx"></small></div>`;
-            const result = document.createElement('div');
-            result.className = 'relay-meta';
-            result.dataset.relayResult = '';
-            result.setAttribute('role', 'status');
-            const trafficResult = document.createElement('div');
-            trafficResult.className = 'relay-meta';
-            trafficResult.dataset.relayTrafficResult = '';
-            trafficResult.setAttribute('role', 'status');
-            card.append(stats, result, trafficResult);
+            card.append(stats);
             actions.append(
                 relayIcon(disabled ? 'فعال' : 'غیرفعال', 'power', 'info', () => mutateRelay(async () => {
                     await setPeerDisabledState(iface.name, !disabled);
@@ -4968,11 +4969,6 @@
             for (const field of card.querySelectorAll('[data-metric]')) {
                 setText(field, metrics[field.dataset.metric]);
             }
-            const recent = test?.checkedAt && now - test.checkedAt <= LIVE_TEST_DISPLAY_MS;
-            const result = test?.state === 'running' ? test.text
-                : recent && (test.endpoint || !latest || latest === test) ? `${new Date(test.checkedAt).toLocaleTimeString('fa-IR')} · ${test.text}` : '';
-            setText(card.querySelector('[data-relay-result]'), result);
-            setText(card.querySelector('[data-relay-traffic-result]'), traffic?.text || '');
         }
     }
 

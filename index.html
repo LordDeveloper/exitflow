@@ -2524,17 +2524,16 @@
         const previousAvg = previous?.avg;
         peerTests.set(name, { state: 'running', automatic, avg: previousAvg, checkedAt: previous?.checkedAt, text: `در حال فرستادن ${countNum} بسته به ${target}…` });
         paintPeerTest(name);
-        const routed = { address: target, count: String(countNum), interval: '300ms', interface: name };
+        const routed = { address: target, count: String(countNum), interface: name };
+        if (name.startsWith('mv-wg-')) routed['routing-table'] = name;
         if (srcAddress) routed['src-address'] = srcAddress;
         try {
             let result;
             try {
-                result = await apiFetch('/ping', 'POST', routed, automatic ? 5000 : 25000);
+                result = await apiFetch('/ping', 'POST', { ...routed, interval: '300ms' }, automatic ? 5000 : 25000);
             } catch (err) {
                 if (!/400|unknown/i.test(err.message)) throw err;
-                const retryPayload = { address: target, count: String(countNum), interface: name };
-                if (srcAddress) retryPayload['src-address'] = srcAddress;
-                result = await apiFetch('/ping', 'POST', retryPayload, automatic ? 5000 : 25000);
+                result = await apiFetch('/ping', 'POST', routed, automatic ? 5000 : 25000);
             }
             const summary = summarizePing(result);
             if (summary.received > 0) {

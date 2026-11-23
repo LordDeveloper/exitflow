@@ -1068,6 +1068,7 @@
     let dhcpLeases = [];
     let visibleClientCount = 0;
     const peerTests = new Map();
+    let relayPingOrderDirty = false;
     const LIVE_TEST_DISPLAY_MS = 60_000;
     let lastAutomaticPing = -Infinity;
 
@@ -2470,6 +2471,7 @@
         let running = false;
         peerTests.forEach((item) => { if (item.state === 'running') running = true; });
         if (barButton) barButton.disabled = running;
+        if (info && info.state !== 'running' && info.avg !== info.previousAvg) relayPingOrderDirty = true;
         updateRelayCardStats();
     }
 
@@ -2495,7 +2497,8 @@
         const countNum = Math.min(20, Math.max(1, Number(customCount) || 3));
         const selectedVal = document.getElementById('pathTestPeerValue');
         if (selectedVal && !automatic) selectedVal.dataset.activePeer = name;
-        peerTests.set(name, { state: 'running', automatic, text: `در حال فرستادن ${countNum} بسته به ${target}…` });
+        const previousAvg = peerTests.get(name)?.avg;
+        peerTests.set(name, { state: 'running', automatic, avg: previousAvg, text: `در حال فرستادن ${countNum} بسته به ${target}…` });
         paintPeerTest(name);
         const routed = { address: target, count: String(countNum), interval: '300ms', interface: name };
         if (srcAddress) routed['src-address'] = srcAddress;
@@ -2511,12 +2514,12 @@
             }
             const summary = summarizePing(result);
             if (summary.received > 0) {
-                peerTests.set(name, { state: 'ok', automatic, checkedAt: Date.now(), avg: summary.avg, text: `مسیر به ${target} باز است · ${summary.received} از ${summary.sent} جواب` + (summary.avg ? ' · ' + summary.avg : '') });
+                peerTests.set(name, { state: 'ok', automatic, previousAvg, checkedAt: Date.now(), avg: summary.avg, text: `مسیر به ${target} باز است · ${summary.received} از ${summary.sent} جواب` + (summary.avg ? ' · ' + summary.avg : '') });
             } else {
-                peerTests.set(name, { state: 'fail', automatic, checkedAt: Date.now(), text: `پینگ ${target} از این تونل پاسخی نگرفت` });
+                peerTests.set(name, { state: 'fail', automatic, previousAvg, checkedAt: Date.now(), text: `پینگ ${target} از این تونل پاسخی نگرفت` });
             }
         } catch (err) {
-            peerTests.set(name, { state: 'fail', automatic, checkedAt: Date.now(), text: err.message });
+            peerTests.set(name, { state: 'fail', automatic, previousAvg, checkedAt: Date.now(), text: err.message });
         }
         paintPeerTest(name);
     }
@@ -4604,7 +4607,24 @@
         );
     }
 
+    function bestRelayPing(interfaces) {
+        let best = Infinity;
+        for (const iface of interfaces) {
+            if (isTrue(iface.disabled)) continue;
+            const latency = pingMilliseconds(peerTests.get(iface.name)?.avg);
+            if (latency != null) best = Math.min(best, latency);
+        }
+        return best;
+    }
+
+    function compareRelayCities(a, b) {
+        return (a.ping - b.ping)
+            || Number(Boolean(b.installed.length)) - Number(Boolean(a.installed.length))
+            || a.country.localeCompare(b.country) || a.city.localeCompare(b.city);
+    }
+
     function renderRelayManagement() {
+        relayPingOrderDirty = false;
         const query = document.getElementById('relayCatalogSearch').value.trim().toLowerCase();
         const filter = document.getElementById('relayInstallFilter').value;
         const hideDisabled = document.getElementById('hideDisabledRelays').checked;
@@ -4630,8 +4650,7 @@
             if (filter === 'available' && (!installedRelays || city.installed.length)) return false;
             return [city.city, city.country, ...city.relays.flatMap(relay => [relay.name, relay.ip])]
                 .join(' ').toLowerCase().includes(query);
-        }).sort((a, b) => Number(Boolean(b.installed.length)) - Number(Boolean(a.installed.length))
-            || a.country.localeCompare(b.country) || a.city.localeCompare(b.city));
+        }).map(city => ({ ...city, ping: bestRelayPing(city.installed) })).sort(compareRelayCities);
         const pages = Math.max(1, Math.ceil(matches.length / relayPageSize));
         relayPage = Math.min(relayPage, pages - 1);
         document.getElementById('relayPageCount').textContent = matches.length
@@ -4820,6 +4839,11 @@
 
     function updateRelayCardStats() {
         if (document.getElementById('tabWireguard').hidden) return;
+        if (relayPingOrderDirty && !relayBusy
+            && !document.querySelector('#relayCatalogRows .relay-edit:not([hidden]), #relayCatalogRows details[open]')) {
+            renderRelayManagement();
+            return;
+        }
         const models = new Map(wgCatalog.map(model => [model.name, model]));
         const now = Date.now();
         const cards = relayManagement.querySelectorAll('[data-relay-interface]');

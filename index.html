@@ -1072,6 +1072,9 @@
     let relayPingOrderDirty = false;
     let relayPingPaintPending = false;
     const LIVE_TEST_DISPLAY_MS = 60_000;
+    const PEER_PING_REFRESH_MS = 15_000;
+    const PEER_PING_TICK_MS = 1500;
+    let peerPingTimer = null;
 
     let prevIfaceStats = new Map();
     let prevClientBytes = new Map();
@@ -2465,12 +2468,12 @@
         const bar = document.getElementById('pathTestResult');
         const barButton = document.getElementById('pathTestBtn');
         const selectedVal = document.getElementById('pathTestPeerValue');
-        if (bar && info && selectedVal && (selectedVal.dataset.activePeer === name || selectedVal.value === name)) {
+        if (bar && info && !info.automatic && selectedVal && (selectedVal.dataset.activePeer === name || selectedVal.value === name)) {
             bar.className = 'test-result ' + (info.state === 'ok' ? 'ok' : info.state === 'fail' ? 'bad' : 'muted');
             bar.textContent = name + ' — ' + info.text;
         }
         const selectedTest = peerTests.get(selectedVal?.value);
-        if (barButton) barButton.disabled = selectedTest?.state === 'running';
+        if (barButton) barButton.disabled = selectedTest?.state === 'running' && !selectedTest.automatic;
         if (info && info.state !== 'running' && info.avg !== info.previousAvg) relayPingOrderDirty = true;
         if (!relayPingPaintPending) {
             relayPingPaintPending = true;
@@ -2488,43 +2491,43 @@
         return null;
     }
 
-    async function testPeerPath(name, srcAddress, customTarget, customCount) {
+    async function testPeerPath(name, srcAddress, customTarget, customCount, automatic = false) {
         if (!monitoring) {
             setStatus('اول به روتر متصل شو.', true);
             return;
         }
         if (peerTests.get(name)?.state === 'running') {
-            setStatus('تست پینگ همین نود هنوز تمام نشده.', true);
+            if (!automatic) setStatus('تست پینگ همین نود هنوز تمام نشده.', true);
             return;
         }
         const target = normalizePingTarget(customTarget) || '1.1.1.1';
         const countNum = Math.min(20, Math.max(1, Number(customCount) || 3));
         const selectedVal = document.getElementById('pathTestPeerValue');
-        if (selectedVal) selectedVal.dataset.activePeer = name;
+        if (selectedVal && !automatic) selectedVal.dataset.activePeer = name;
         const previous = peerTests.get(name);
         const previousAvg = previous?.avg;
-        peerTests.set(name, { state: 'running', avg: previousAvg, checkedAt: previous?.checkedAt, text: `در حال فرستادن ${countNum} بسته به ${target}…` });
+        peerTests.set(name, { state: 'running', automatic, avg: previousAvg, checkedAt: previous?.checkedAt, text: `در حال فرستادن ${countNum} بسته به ${target}…` });
         paintPeerTest(name);
         const routed = { address: target, count: String(countNum), interval: '300ms', interface: name };
         if (srcAddress) routed['src-address'] = srcAddress;
         try {
             let result;
             try {
-                result = await apiFetch('/ping', 'POST', routed, 25000);
+                result = await apiFetch('/ping', 'POST', routed, automatic ? 5000 : 25000);
             } catch (err) {
                 if (!/400|unknown/i.test(err.message)) throw err;
                 const retryPayload = { address: target, count: String(countNum), interface: name };
                 if (srcAddress) retryPayload['src-address'] = srcAddress;
-                result = await apiFetch('/ping', 'POST', retryPayload, 25000);
+                result = await apiFetch('/ping', 'POST', retryPayload, automatic ? 5000 : 25000);
             }
             const summary = summarizePing(result);
             if (summary.received > 0) {
-                peerTests.set(name, { state: 'ok', previousAvg, checkedAt: Date.now(), avg: summary.avg, text: `مسیر به ${target} باز است · ${summary.received} از ${summary.sent} جواب` + (summary.avg ? ' · ' + summary.avg : '') });
+                peerTests.set(name, { state: 'ok', automatic, previousAvg, checkedAt: Date.now(), avg: summary.avg, text: `مسیر به ${target} باز است · ${summary.received} از ${summary.sent} جواب` + (summary.avg ? ' · ' + summary.avg : '') });
             } else {
-                peerTests.set(name, { state: 'fail', previousAvg, checkedAt: Date.now(), text: `پینگ ${target} از این تونل پاسخی نگرفت` });
+                peerTests.set(name, { state: 'fail', automatic, previousAvg, checkedAt: Date.now(), text: `پینگ ${target} از این تونل پاسخی نگرفت` });
             }
         } catch (err) {
-            peerTests.set(name, { state: 'fail', previousAvg, checkedAt: Date.now(), text: err.message });
+            peerTests.set(name, { state: 'fail', automatic, previousAvg, checkedAt: Date.now(), text: err.message });
         }
         paintPeerTest(name);
     }
@@ -3099,11 +3102,14 @@
     function startLiveTimer() {
         stopLiveTimer();
         liveTimer = setInterval(() => { poll(); }, POLL_MS);
+        peerPingTimer = setInterval(scheduleVisiblePeerPing, PEER_PING_TICK_MS);
     }
 
     function stopLiveTimer() {
         if (liveTimer) clearInterval(liveTimer);
+        if (peerPingTimer) clearInterval(peerPingTimer);
         liveTimer = null;
+        peerPingTimer = null;
     }
 
     function resetSpeedWindow() {
@@ -4824,6 +4830,22 @@
             : { state: 'problem', text: 'آفلاین' };
     }
 
+    function scheduleVisiblePeerPing() {
+        if (!monitoring || document.hidden || document.getElementById('tabWireguard').hidden
+            || busy || relayBusy) return;
+        const now = Date.now();
+        const interfaces = new Map([...(installedRelays?.values() || [])].map(iface => [iface.name, iface]));
+        for (const card of relayManagement.querySelectorAll('[data-relay-interface]')) {
+            if (!card.getClientRects().length) continue;
+            const name = card.dataset.relayInterface;
+            const iface = interfaces.get(name);
+            if (!iface || isTrue(iface.disabled)) continue;
+            const test = peerTests.get(name);
+            if (test?.state === 'running' || now - (test?.checkedAt ?? -Infinity) < PEER_PING_REFRESH_MS) continue;
+            void testPeerPath(name, undefined, undefined, 1, true);
+        }
+    }
+
     function updateRelayCardStats() {
         if (document.getElementById('tabWireguard').hidden) return;
         if (relayPingOrderDirty && !relayBusy
@@ -4849,7 +4871,7 @@
                 health: model?.health.ageText || model?.health.text || '—',
                 clients: model ? String(model.clients.length) : '—',
                 latency: model?.disabled ? 'خاموش' : test?.avg
-                    || (test?.state === 'running' ? 'در حال تست…' : test?.state === 'fail' ? 'بی‌پاسخ' : 'تست نشده'),
+                    || (test?.state === 'running' ? 'در حال تست…' : test?.state === 'fail' ? 'بی‌پاسخ' : 'در صف تست'),
                 rxSpeed: model ? formatSpeed(model.stats.rxSpeed) : '—',
                 txSpeed: model ? formatSpeed(model.stats.txSpeed) : '—',
                 rx: model ? formatBytes(model.stats.rx) : '',

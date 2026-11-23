@@ -582,6 +582,7 @@
         .relay-peer + .relay-peer { border-top: 1px solid var(--border); }
         .relay-meta { color: var(--muted); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
         .relay-meta:empty { display: none; }
+        .relay-endpoint { justify-self: start; align-self: flex-start; font-variant-numeric: tabular-nums; }
         .relay-edit { min-width: 0; }
         .relay-edit select { max-width: 100%; margin: 6px; }
         .relay-actions { border-top: 1px solid #335047; padding-top: 8px; }
@@ -4657,9 +4658,11 @@
         const peer = iface?.peer;
         const current = relays.find(relay => relay.ip && relay.ip === peer?.['endpoint-address']
             && relay.publicKey === peer?.['public-key']);
+        const choices = relays.filter(relay => relay.ip && relay.active !== false);
         const disabled = iface && isTrue(iface.disabled);
         const title = document.createElement('strong');
-        title.textContent = iface ? (current?.name || iface.name) : `${relays.length} رله`;
+        title.textContent = iface ? (current?.name || iface.name) : (choices[0]?.name || 'رلهٔ فعال موجود نیست');
+        title.dir = iface || choices.length ? 'ltr' : 'rtl';
         const state = document.createElement('span');
         state.className = 'relay-state';
         state.dataset.relayState = '';
@@ -4668,7 +4671,13 @@
         const titleRow = document.createElement('div');
         titleRow.className = 'relay-peer-title';
         titleRow.append(title, state);
-        card.append(titleRow);
+        const endpoint = document.createElement('span');
+        endpoint.className = 'relay-meta relay-endpoint';
+        endpoint.dir = 'ltr';
+        endpoint.textContent = iface
+            ? current?.ip || peer?.['endpoint-address'] || ''
+            : choices[0]?.ip || '';
+        card.append(titleRow, endpoint);
         const actions = document.createElement('footer');
         actions.className = 'relay-actions';
         if (iface) {
@@ -4702,22 +4711,27 @@
                     }
                 }, relayBusy));
         }
-        const choices = relays.filter(relay => relay.ip);
         if (installedRelays && choices.length && (!iface || peer)) {
             const edit = document.createElement('div');
             edit.className = 'relay-edit';
             edit.hidden = true;
-            let selected = current?.name || (iface ? '' : choices[0].name);
+            const currentAvailable = choices.some(relay => relay.name === current?.name);
+            let selected = currentAvailable ? current.name : (iface ? '' : choices[0].name);
             const options = choices.map(relay => ({
                 value: relay.name,
                 code: relay.name.split('-')[0],
-                text: [relay.city, relay.name, relay.active ? '' : 'غیرفعال در Mullvad'].filter(Boolean).join(' · ')
+                text: [relay.city, relay.name, relay.ip].filter(Boolean).join(' · ')
             }));
-            if (iface && !current) options.unshift({ value: '', code: '', text: 'انتخاب رلهٔ جایگزین', placeholder: true });
+            if (iface && !currentAvailable) options.unshift({ value: '', code: '', text: 'انتخاب رلهٔ جایگزین', placeholder: true });
             const picker = buildRelayPicker(options, selected, 'انتخاب رلهٔ شهر', value => {
                 if (!value || value === selected) return;
                 selected = value;
-                if (iface) mutateRelay(() => changeCityRelay(iface, value));
+                if (iface) {
+                    mutateRelay(() => changeCityRelay(iface, value));
+                } else {
+                    title.textContent = value;
+                    endpoint.textContent = choices.find(relay => relay.name === value).ip;
+                }
             });
             edit.append(picker);
             card.append(edit);

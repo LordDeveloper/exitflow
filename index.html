@@ -2167,6 +2167,18 @@
         }
     }
 
+    function pickerPeerOptions(picker) {
+        if (picker.id !== 'pathTestPicker') return wgInterfaces.filter(peer => !peer.disabled);
+        if (!wgCatalog.length) return wgInterfaces;
+        return wgCatalog.map(model => ({
+            name: model.name,
+            comment: model.comment,
+            disabled: model.disabled,
+            endpoint: model.health?.endpoint || '',
+            handshake: model.health?.text || 'بدون هندشیک'
+        }));
+    }
+
     function fillPickerList(picker, current) {
         const isPathPicker = picker.id === 'pathTestPicker';
         const list = picker.querySelector('.peer-picker-list');
@@ -2179,15 +2191,7 @@
             direct.innerHTML = '<span class="peer-option-name">اینترنت عادی</span><span class="peer-option-hs">بدون مولواد</span>';
             fragment.appendChild(direct);
         }
-        const sourceList = isPathPicker && wgCatalog.length
-            ? wgCatalog.map((m) => ({
-                name: m.name,
-                comment: m.comment,
-                disabled: m.disabled,
-                endpoint: m.health ? m.health.endpoint : '',
-                handshake: m.health ? m.health.text : 'بدون هندشیک'
-            }))
-            : wgInterfaces;
+        const sourceList = pickerPeerOptions(picker);
         sourceList.forEach((wg) => {
             const option = document.createElement('button');
             option.type = 'button';
@@ -2210,17 +2214,8 @@
     }
 
     function filterPickerList(picker) {
-        const isPathPicker = picker.id === 'pathTestPicker';
         const query = picker.querySelector('.peer-picker-search').value;
-        const sourceList = isPathPicker && wgCatalog.length
-            ? wgCatalog.map((m) => ({
-                name: m.name,
-                comment: m.comment,
-                disabled: m.disabled,
-                endpoint: m.health ? m.health.endpoint : '',
-                handshake: m.health ? m.health.text : 'بدون هندشیک'
-            }))
-            : wgInterfaces;
+        const sourceList = pickerPeerOptions(picker);
         const byName = new Map(sourceList.map((wg) => [wg.name, wg]));
         picker.querySelectorAll('.peer-option').forEach((option) => {
             if (!option.dataset.peer) {
@@ -2259,16 +2254,7 @@
             list.scrollTop = scroll;
             return;
         }
-        const isPathPicker = picker.id === 'pathTestPicker';
-        const sourceList = isPathPicker && wgCatalog.length
-            ? wgCatalog.map((m) => ({
-                name: m.name,
-                comment: m.comment,
-                disabled: m.disabled,
-                endpoint: m.health ? m.health.endpoint : '',
-                handshake: m.health ? m.health.text : 'بدون هندشیک'
-            }))
-            : wgInterfaces;
+        const sourceList = pickerPeerOptions(picker);
         const byName = new Map(sourceList.map((wg) => [wg.name, wg]));
         picker.querySelectorAll('.peer-option').forEach((option) => {
             option.classList.toggle('active', (option.dataset.peer || '') === current);

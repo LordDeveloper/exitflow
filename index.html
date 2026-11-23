@@ -5052,44 +5052,79 @@
         const key = relayKeyInput.value.trim();
         const address = relayAddressInput.value.trim();
         const previous = await localDashboard('wireguard');
-        let plans = [];
+        const addressPath = '/ip/address';
+        const addressFields = '?.proplist=.id,interface,address,network,dynamic,disabled';
+        let ifaces = [];
+        let addresses = [];
         if (monitoring) {
-            const [ifaces, addresses] = await Promise.all([
+            const [wireguard, existingAddresses] = await Promise.all([
                 apiList('/interface/wireguard?.proplist=.id,name'),
-                apiList('/ip/address?.proplist=.id,interface,address,dynamic')
+                apiList(addressPath + addressFields)
             ]);
-            plans = ifaces.filter(iface => iface.name.startsWith('mv-wg-')).map(iface => {
-                const rows = addresses.filter(row => row.interface === iface.name && !isTrue(row.dynamic) && isIpv4(ipOnly(row.address)));
-                const previousRow = rows.find(row => row.address === previous.address);
-                const target = previousRow || (rows.length === 1 ? rows[0] : null);
-                if (!rows.some(row => row.address === address) && !target && rows.length) {
-                    throw new Error(`آدرس تونل ${iface.name} بین چند آدرس مشخص نیست`);
-                }
-                return { iface, rows, target };
-            });
+            ifaces = wireguard.filter(iface => iface.name.startsWith('mv-wg-'));
+            addresses = existingAddresses;
         }
-        const saved = await localDashboard('wireguard', { key, address, includeKey: plans.length > 0 });
+
+        const saved = await localDashboard('wireguard', { key, address, includeKey: ifaces.length > 0 });
         const failures = [];
-        for (const { iface, rows, target } of plans) {
+        const updated = [];
+        for (const iface of ifaces) {
+            const rows = addresses.filter(row => row.interface === iface.name
+                && !isTrue(row.dynamic) && isIpv4(ipOnly(row.address)));
+            const existing = rows.find(row => row.address === saved.address);
+            const previousRow = rows.find(row => row.address === previous.address);
+            const target = existing || previousRow || (rows.length === 1 ? rows[0] : null);
+            if (!target && rows.length) {
+                failures.push(`${iface.name} (آدرس تونل بین چند آدرس مشخص نیست)`);
+                continue;
+            }
             try {
-                await apiFetch('/interface/wireguard/' + assertId(iface['.id']), 'PATCH', { 'private-key': saved.key });
-                if (!rows.some(row => row.address === saved.address)) {
-                    if (target) {
-                        await apiFetch('/ip/address/' + assertId(target['.id']), 'PATCH', { address: saved.address });
-                    } else {
-                        await apiFetch('/ip/address', 'PUT', { interface: iface.name, address: saved.address });
-                    }
-                }
+                await apiFetch('/interface/wireguard/' + assertId(iface['.id']), 'PATCH', {
+                    'private-key': saved.key
+                });
             } catch {
-                failures.push(iface.name);
+                failures.push(`${iface.name} (روتر تغییر کلید خصوصی را تأیید نکرد)`);
+                continue;
+            }
+            try {
+                const fields = { address: saved.address, network: saved.network, disabled: 'no' };
+                if (!target) {
+                    await apiFetch(addressPath, 'PUT', { ...fields, interface: iface.name });
+                } else if (target.address !== saved.address || isTrue(target.disabled) || target.network !== saved.network) {
+                    await apiFetch(addressPath + '/' + assertId(target['.id']), 'PATCH', fields);
+                }
+                if (existing && previousRow && existing['.id'] !== previousRow['.id']) {
+                    await deleteById(addressPath, previousRow['.id']);
+                }
+                updated.push({ name: iface.name, previous: previousRow?.address });
+            } catch (error) {
+                failures.push(`${iface.name} (تغییر IPv4: ${error.message})`);
             }
         }
-        if (plans.length) void refreshAll().catch(error => setPollStatus(error.message));
-        if (failures.length) {
-            throw new Error(`تنظیمات محلی ذخیره شد، اما اعمال روی این اینترفیس‌ها ناموفق بود: ${failures.join('، ')}`);
+
+        let confirmed = 0;
+        if (updated.length) {
+            try {
+                const verified = await apiList(addressPath + addressFields);
+                for (const iface of updated) {
+                    const rows = verified.filter(row => row.interface === iface.name);
+                    const current = rows.some(row => row.address === saved.address
+                        && row.network === saved.network && !isTrue(row.disabled));
+                    const stale = iface.previous && iface.previous !== saved.address
+                        && rows.some(row => row.address === iface.previous && !isTrue(row.disabled));
+                    if (current && !stale) confirmed += 1;
+                    else failures.push(`${iface.name} (آدرس IPv4 جدید روی روتر تأیید نشد)`);
+                }
+            } catch {
+                failures.push('خواندن آدرس‌های روتر برای تأیید تغییر ناموفق بود');
+            }
         }
         showRelaySettings(saved);
-        return monitoring ? `ذخیره شد؛ ${plans.length} اینترفیس Mullvad بررسی شد`
+        if (ifaces.length) void refreshAll().catch(error => setPollStatus(error.message));
+        if (failures.length) {
+            throw new Error(`تنظیمات محلی ذخیره شد؛ تأیید IPv4 روی ${confirmed} از ${ifaces.length} اینترفیس. ${failures.join('، ')}`);
+        }
+        return monitoring ? `ذخیره شد؛ IPv4 روی ${confirmed} اینترفیس Mullvad تأیید شد`
             : 'محلی ذخیره شد؛ برای اعمال روی روتر متصل شوید و دوباره ذخیره کنید';
     }
 

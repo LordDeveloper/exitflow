@@ -172,13 +172,15 @@ def dispatch(path, method, payload):
                 try:
                     if len(base64.b64decode(key, validate=True)) != 32 or "/" not in address:
                         raise ValueError
-                    address = str(ipaddress.IPv4Interface(address))
+                    parsed_address = ipaddress.IPv4Interface(address)
+                    address = str(parsed_address)
                 except (ValueError, binascii.Error):
                     raise ValueError("Enter a valid WireGuard private key and IPv4 address with prefix.") from None
                 write_database(connection, {"wireguard": {"address": address, "key": key}})
                 result = {"address": address, "hasKey": True}
                 if payload.get("includeKey") is True:
                     result["key"] = key
+                    result["network"] = str(parsed_address.network.network_address)
                 return result
         if path == "/dashboard/provision" and method == "POST":
             if not settings.get("key"):

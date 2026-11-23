@@ -2034,41 +2034,57 @@
         if (targetList && !/^mv-wg-[A-Za-z0-9._-]+$/.test(targetList)) {
             throw new Error('نام Peer نامعتبر است');
         }
-        const pathNotes = [];
-        const pathWarnings = [];
+        const notes = [];
+        const warnings = [];
         if (targetList) {
-            const path = await ensurePeerDataPath(targetList);
-            pathNotes.push.apply(pathNotes, path.notes);
-            pathWarnings.push.apply(pathWarnings, path.warnings);
-        }
-        if (targetList && isDynamic) {
-            if (!leaseId) throw new Error('شناسه DHCP lease پیدا نشد');
-            await makeLeaseStatic(leaseId, true);
-        }
-        const lists = await apiList('/ip/firewall/address-list?.proplist=.id,list,address,disabled');
-        const mine = lists.filter((row) => row.list && String(row.list).startsWith('mv-wg-') && sameIp(row.address, ip) && row['.id']);
-        if (!targetList) {
-            for (const row of mine) await deleteById('/ip/firewall/address-list', row['.id']);
-        } else {
-            const enabled = mine.filter((row) => row.list === targetList && !isTrue(row.disabled));
-            const keepId = enabled.length ? enabled[0]['.id'] : null;
-            for (const row of mine) {
-                if (row['.id'] !== keepId) await deleteById('/ip/firewall/address-list', row['.id']);
+            try {
+                const path = await ensurePeerDataPath(targetList);
+                notes.push(...path.notes);
+                warnings.push(...path.warnings);
+            } catch (error) {
+                throw new Error('آماده‌سازی مسیر Peer: ' + error.message);
             }
-            if (!keepId) {
+            if (isDynamic) {
                 try {
-                    await apiFetch('/ip/firewall/address-list', 'PUT', {
-                        list: targetList,
-                        address: ip,
-                        comment: safeComment(host)
-                    });
-                } catch (err) {
-                    if (!/already/i.test(err.message)) throw err;
+                    if (!leaseId) throw new Error('شناسه DHCP lease پیدا نشد');
+                    await makeLeaseStatic(leaseId, true);
+                } catch (error) {
+                    warnings.push('DHCP ثابت نشد. تخصیص برای IP فعلی اعمال می‌شود: ' + error.message);
                 }
             }
         }
-        const removed = await flushClientConnections(ip);
-        return { removed, notes: pathNotes, warnings: pathWarnings };
+
+        const path = '/ip/firewall/address-list';
+        const readAssignments = async () => (await apiList(path + '?.proplist=.id,list,address,disabled'))
+            .filter(row => row['.id'] && String(row.list || '').startsWith('mv-wg-') && sameIp(row.address, ip));
+        try {
+            let mine = await readAssignments();
+            let keep = targetList && mine.find(row => row.list === targetList && !isTrue(row.disabled));
+            if (targetList && !keep) {
+                const disabled = mine.find(row => row.list === targetList);
+                if (disabled) {
+                    await apiFetch(path + '/' + assertId(disabled['.id']), 'PATCH', { disabled: 'no' });
+                } else {
+                    await apiFetch(path, 'PUT', { list: targetList, address: ip, comment: safeComment(host) });
+                }
+                mine = await readAssignments();
+                keep = mine.find(row => row.list === targetList && !isTrue(row.disabled));
+                if (!keep) throw new Error(`IP ${ip} در فهرست ${targetList} تأیید نشد`);
+            }
+            for (const row of mine) {
+                if (row['.id'] !== keep?.['.id']) await deleteById(path, row['.id']);
+            }
+        } catch (error) {
+            throw new Error('ثبت تخصیص در Address List: ' + error.message);
+        }
+
+        let removed = 0;
+        try {
+            removed = await flushClientConnections(ip);
+        } catch (error) {
+            warnings.push('تخصیص ثبت شد، اما بستن اتصال‌های قبلی ناموفق بود: ' + error.message);
+        }
+        return { removed, notes, warnings };
     }
 
     function stableKeys(previous, incoming) {

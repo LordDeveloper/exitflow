@@ -59,11 +59,10 @@ def get_relays_data():
         return json.loads(response.read().decode("utf-8"))
 
 def generate_routes_rsc(relays):
-    endpoints = sorted({
-        ipaddress.IPv4Address(relay["ipv4_addr_in"])
+    endpoints = [
+        (relay["hostname"].lower().split("-wg-", 1)[0], ipaddress.IPv4Address(relay["ipv4_addr_in"]))
         for relay in relays
-        if relay.get("ipv4_addr_in")
-    })
+    ]
     if not endpoints:
         raise ValueError("No Mullvad IPv4 endpoints selected")
 
@@ -73,13 +72,29 @@ def generate_routes_rsc(relays):
         f'    :local uplink "{INTERFACE_NAME}"',
         '    :local routeTag "Mullvad endpoint via toTR"',
         '    :if ([:len [/interface wireguard find where name=$uplink and running=yes and disabled=no]] != 1) do={ :error "toTR must be running" }',
-        '    :local prefixes {' + ';'.join(f'"{ip}/32"' for ip in endpoints) + '}',
+        '    :local defaults {' + ';'.join(f'"{city}|{ip}/32"' for city, ip in endpoints) + '}',
+        '    :local prefixes [:toarray ""]',
+        '    :local installedCities [:toarray ""]',
         '    :foreach peer in=[/interface wireguard peers find where interface~"^mv-wg-" and disabled=no] do={',
         '        :local ip [:toip [/interface wireguard peers get $peer endpoint-address]]',
         '        :if ([:typeof $ip] != "ip") do={ :set ip [:toip [/interface wireguard peers get $peer current-endpoint-address]] }',
         '        :if ([:typeof $ip] != "ip") do={ :error "An enabled Mullvad peer has no usable IPv4 endpoint" }',
         '        :local prefix ([:tostr $ip] . "/32")',
         '        :if ([:typeof [:find $prefixes $prefix]] = "nil") do={ :set prefixes ($prefixes, $prefix) }',
+        '        :local iface [/interface wireguard peers get $peer interface]',
+        '        :local cityEnd [:find $iface "-wg-" 6]',
+        '        :if ([:typeof $cityEnd] = "num") do={',
+        '            :local city [:pick $iface 6 $cityEnd]',
+        '            :set ($installedCities->$city) true',
+        '        }',
+        '    }',
+        '    :foreach entry in=$defaults do={',
+        '        :local sep [:find $entry "|"]',
+        '        :local city [:pick $entry 0 $sep]',
+        '        :local prefix [:pick $entry ($sep + 1) [:len $entry]]',
+        '        :if (([:typeof ($installedCities->$city)] = "nil") and ([:typeof [:find $prefixes $prefix]] = "nil")) do={',
+        '            :set prefixes ($prefixes, $prefix)',
+        '        }',
         '    }',
         '    :foreach peer in=[/interface wireguard peers find where interface=$uplink and disabled=no] do={',
         '        :foreach field in={"endpoint-address";"current-endpoint-address"} do={',
@@ -200,7 +215,7 @@ def select_relays(data):
 def main():
     private_key, client_ipv4 = load_wireguard_settings()
     catalog = get_relays_data()
-    peer_relays = select_relays(catalog) if private_key else []
+    peer_relays = select_relays(catalog)
     if private_key and peer_relays:
         if not client_ipv4 or "/" not in client_ipv4:
             raise SystemExit("Set WG_CLIENT_IPV4 to the IPv4 address with prefix from your Mullvad config.")
@@ -209,15 +224,14 @@ def main():
         except ValueError:
             raise SystemExit("WG_CLIENT_IPV4 must be a valid IPv4 address with prefix.") from None
 
-    endpoint_count = generate_routes_rsc(catalog)
-    print(f"Generated '{OUTPUT_ROUTES_FILE}' ({endpoint_count} endpoint IPv4 routes).")
-    if peer_relays:
+    endpoint_count = generate_routes_rsc(peer_relays)
+    print(f"Generated '{OUTPUT_ROUTES_FILE}' ({endpoint_count} default city routes; keeps installed endpoints).")
+    if private_key and peer_relays:
         generate_interfaces_rsc(peer_relays, OUTPUT_IFACES_FILE, private_key, client_ipv4)
         generate_interfaces_rsc(peer_relays[:1], OUTPUT_SIMPLE_FILE, private_key, client_ipv4)
         print(f"Generated '{OUTPUT_IFACES_FILE}' for {len(peer_relays)} peers.")
         print(f"Generated '{OUTPUT_SIMPLE_FILE}' for testing {peer_relays[0]['hostname']}.")
-    elif private_key:
-        print("No active peer relays matched the selection.")
+
 
 if __name__ == "__main__":
     main()

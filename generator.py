@@ -11,6 +11,7 @@ LOCAL_JSON = "relays.json"
 OUTPUT_ROUTES_FILE = "mullvad-offline.rsc"
 OUTPUT_IFACES_FILE = "mullvad-interfaces.rsc"
 OUTPUT_SIMPLE_FILE = "simple.rsc"
+OUTPUT_RESET_FILE = "reset-settings.rsc"
 
 PROXY = ""
 
@@ -43,7 +44,8 @@ def load_wireguard_settings():
 
 
 def get_relays_data():
-    for source in (Path(LOCAL_JSON), Path(__file__).resolve().parent / "storage" / LOCAL_JSON):
+    storage = Path(__file__).resolve().parent / "storage"
+    for source in (Path(LOCAL_JSON), Path("relay.json"), storage / LOCAL_JSON, storage / "relay.json"):
         if not source.is_file():
             continue
         print(f"Reading relays from local file '{source}'...")
@@ -58,7 +60,7 @@ def get_relays_data():
     with opener.open(URL, timeout=30) as response:
         return json.loads(response.read().decode("utf-8"))
 
-def generate_routes_rsc(relays):
+def build_route_lines(relays, keep_installed_endpoints=True):
     endpoints = sorted({
         ipaddress.IPv4Address(relay["ipv4_addr_in"])
         for relay in relays
@@ -74,13 +76,18 @@ def generate_routes_rsc(relays):
         '    :local routeTag "Mullvad endpoint via toTR"',
         '    :if ([:len [/interface wireguard find where name=$uplink and running=yes and disabled=no]] != 1) do={ :error "toTR must be running" }',
         '    :local prefixes {' + ';'.join(f'"{ip}/32"' for ip in endpoints) + '}',
-        '    :foreach peer in=[/interface wireguard peers find where interface~"^mv-wg-" and disabled=no] do={',
-        '        :local ip [:toip [/interface wireguard peers get $peer endpoint-address]]',
-        '        :if ([:typeof $ip] != "ip") do={ :set ip [:toip [/interface wireguard peers get $peer current-endpoint-address]] }',
-        '        :if ([:typeof $ip] != "ip") do={ :error "An enabled Mullvad peer has no usable IPv4 endpoint" }',
-        '        :local prefix ([:tostr $ip] . "/32")',
-        '        :if ([:typeof [:find $prefixes $prefix]] = "nil") do={ :set prefixes ($prefixes, $prefix) }',
-        '    }',
+    ]
+    if keep_installed_endpoints:
+        lines.extend([
+            '    :foreach peer in=[/interface wireguard peers find where interface~"^mv-wg-" and disabled=no] do={',
+            '        :local ip [:toip [/interface wireguard peers get $peer endpoint-address]]',
+            '        :if ([:typeof $ip] != "ip") do={ :set ip [:toip [/interface wireguard peers get $peer current-endpoint-address]] }',
+            '        :if ([:typeof $ip] != "ip") do={ :error "An enabled Mullvad peer has no usable IPv4 endpoint" }',
+            '        :local prefix ([:tostr $ip] . "/32")',
+            '        :if ([:typeof [:find $prefixes $prefix]] = "nil") do={ :set prefixes ($prefixes, $prefix) }',
+            '    }',
+        ])
+    lines.extend([
         '    :foreach peer in=[/interface wireguard peers find where interface=$uplink and disabled=no] do={',
         '        :foreach field in={"endpoint-address";"current-endpoint-address"} do={',
         '            :local ip [:toip [/interface wireguard peers get $peer $field]]',
@@ -117,12 +124,17 @@ def generate_routes_rsc(relays):
         '    }',
         '    :put ("Verified Mullvad endpoint routes in main: " . [:len $prefixes])',
         "}",
-    ]
-    with open(OUTPUT_ROUTES_FILE, "w", encoding="utf-8", newline="\n") as f:
-        f.write("\n".join(lines) + "\n")
-    return len(endpoints)
+    ])
+    return lines, len(endpoints)
 
-def generate_interfaces_rsc(relays, output_file, private_key, client_ipv4):
+
+def generate_routes_rsc(relays):
+    lines, endpoint_count = build_route_lines(relays)
+    Path(OUTPUT_ROUTES_FILE).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return endpoint_count
+
+
+def build_interface_lines(relays, private_key, client_ipv4):
     lines = [
         "# Mullvad WireGuard peer provisioning (RouterOS v7)",
         f"# Replaces existing mv-wg-* interfaces with {len(relays)} peer(s).",
@@ -170,8 +182,35 @@ def generate_interfaces_rsc(relays, output_file, private_key, client_ipv4):
     lines.append("")
     lines.append(f":put \"Full routing & firewall rules created for all {len(relays)} Mullvad peers!\"")
 
-    with open(output_file, "w", encoding="utf-8", newline="\n") as f:
-        f.write("\n".join(lines) + "\n")
+    return lines
+
+
+def generate_interfaces_rsc(relays, output_file, private_key, client_ipv4):
+    lines = build_interface_lines(relays, private_key, client_ipv4)
+    Path(output_file).write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def generate_reset_rsc(catalog, peer_relays, private_key, client_ipv4):
+    routes, _ = build_route_lines(catalog, keep_installed_endpoints=False)
+    interfaces = build_interface_lines(peer_relays, private_key, client_ipv4)
+    # One RouterOS block stops before interface cleanup if route validation fails.
+    lines = ["# Exitflow reset settings: rebuild Mullvad routes and peers", *routes[:-1]]
+    lines.extend("    " + line if line else "" for line in interfaces)
+    lines.extend([
+        '    :foreach entry in=[/ip firewall address-list find where list~"^mv-wg-" and dynamic=no] do={',
+        '        :local targetList [/ip firewall address-list get $entry list]',
+        '        :if ([:len [/interface wireguard find where name=$targetList]] = 0) do={',
+        '            /ip firewall address-list remove $entry',
+        '        }',
+        '    }',
+        '    :put "Exitflow Mullvad settings rebuilt."',
+        "}",
+    ])
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    with open(OUTPUT_RESET_FILE, "w", encoding="utf-8", newline="\n",
+              opener=lambda path, _: os.open(path, flags, 0o600)) as handle:
+        handle.write("\n".join(lines) + "\n")
+
 
 def select_relays(data):
     relays = []
@@ -216,6 +255,8 @@ def main():
         generate_interfaces_rsc(peer_relays[:1], OUTPUT_SIMPLE_FILE, private_key, client_ipv4)
         print(f"Generated '{OUTPUT_IFACES_FILE}' for {len(peer_relays)} peers.")
         print(f"Generated '{OUTPUT_SIMPLE_FILE}' for testing {peer_relays[0]['hostname']}.")
+        generate_reset_rsc(catalog, peer_relays, private_key, client_ipv4)
+        print(f"Generated '{OUTPUT_RESET_FILE}' to rebuild Mullvad settings.")
     elif private_key:
         print("No active peer relays matched the selection.")
 

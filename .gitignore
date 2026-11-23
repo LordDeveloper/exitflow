@@ -4,3 +4,5 @@ mullvad-interfaces.rsc
 .env
 simple.rsc
 /storage/database/
+
+reset-settings.rsc

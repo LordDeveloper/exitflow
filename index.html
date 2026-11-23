@@ -770,7 +770,7 @@
                     <label class="switch" for="showOffline">
                         <input type="checkbox" id="showOffline">
                         <span class="switch-ui" aria-hidden="true"></span>
-                        <span>نمایش دستگاه‌های آفلاین</span>
+                        <span>نمایش دستگاه‌های بدون وضعیت تأییدشده</span>
                     </label>
                     <label class="switch" for="showWired">
                         <input type="checkbox" id="showWired">
@@ -3463,6 +3463,7 @@
                     leaseId: lease['.id'] || '',
                     dynamic: isTrue(lease.dynamic),
                     source: 'dhcp',
+                    leaseBound: lease.status === 'bound',
                     iface: ''
                 });
             });
@@ -3472,8 +3473,10 @@
                 if (!isPrivateLan(ip) || routerIps.has(ip)) return;
                 if (/^(mv-wg-|exit$|toIR$|toTR$|lo)/i.test(iface)) return;
                 if (row.status === 'incomplete' || row.status === 'failed') return;
+                const reachable = row.status === 'reachable' && Boolean(row['mac-address']);
                 const existing = lanClients.get(ip);
                 if (existing) {
+                    existing.arpReachable ||= reachable && (!existing.mac || existing.mac.toLowerCase() === row['mac-address'].toLowerCase());
                     if (!existing.mac) existing.mac = row['mac-address'] || '';
                     existing.iface = iface;
                     return;
@@ -3485,6 +3488,7 @@
                     leaseId: '',
                     dynamic: false,
                     source: 'arp',
+                    arpReachable: reachable,
                     iface
                 });
             });
@@ -3504,7 +3508,8 @@
             const clientRows = Array.from(lanClients.values());
             clientRows.forEach((row) => {
                 row.here = sessionIps.has(row.ip);
-                row.offline = !clientTotals.get(row.ip)?.count;
+                const hasConnections = Boolean(clientTotals.get(row.ip)?.count);
+                row.offline = !(hasConnections || row.leaseBound || row.arpReachable);
 
                 if (!row.host) {
                     if (row.here) row.host = 'همین کامپیوتر';
@@ -3512,7 +3517,8 @@
                     else row.host = 'دستگاه ناشناس';
                 }
                 const place = row.iface ? (' · ' + row.iface) : '';
-                const stateTag = row.offline ? ' · آفلاین' : '';
+                const stateTag = row.offline ? ' · وضعیت نامشخص'
+                    : !hasConnections && row.leaseBound ? ' · اجارهٔ DHCP فعال' : '';
                 if (row.here) row.kind = ' · همین دستگاه' + place + stateTag;
                 else if (row.dynamic) row.kind = ' · پویا' + place + stateTag;
                 else if (row.source === 'arp') row.kind = ' · سیمی' + place + stateTag;

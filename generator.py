@@ -19,12 +19,28 @@ INTERFACE_NAME = "toTR"
 # ==========================================================
 # اطلاعات اکانت Mullvad خود را اینجا وارد کنید (از فایل کانفیگ WireGuard مولواد بردارید)
 # ==========================================================
-WG_PRIVATE_KEY = os.environ.get("MULLVAD_WG_PRIVATE_KEY", "")
-WG_CLIENT_IPV4 = os.environ.get("WG_CLIENT_IPV4", "").strip()
 WG_ENDPOINT_PORT = 51820
 
 # اختیاری: کد کشورها برای محدود کردن لیست (مثلا: ["de", "se", "nl"]) - خالی باشد یعنی همه سرورها
 FILTER_COUNTRIES = []
+
+def load_wireguard_settings():
+    names = ("MULLVAD_WG_PRIVATE_KEY", "WG_CLIENT_IPV4")
+    env_file = Path(__file__).resolve().with_name(".env")
+    values = {}
+    if env_file.is_file():
+        for line in env_file.read_text(encoding="utf-8-sig").splitlines():
+            name, separator, value = line.partition("=")
+            name = name.strip()
+            if not separator or name not in names:
+                continue
+            value = value.strip()
+            if len(value) >= 2 and value[0] in ("'", '"') and value[-1] == value[0]:
+                value = value[1:-1]
+            values[name] = value
+    private_key, client_ipv4 = (os.environ.get(name, values.get(name, "")).strip() for name in names)
+    return private_key, client_ipv4
+
 
 def get_relays_data():
     for source in (Path(LOCAL_JSON), Path(__file__).resolve().parent / "storage" / LOCAL_JSON):
@@ -106,12 +122,12 @@ def generate_routes_rsc(relays):
         f.write("\n".join(lines) + "\n")
     return len(endpoints)
 
-def generate_interfaces_rsc(relays, output_file):
+def generate_interfaces_rsc(relays, output_file, private_key, client_ipv4):
     lines = [
         "# Mullvad WireGuard peer provisioning (RouterOS v7)",
         f"# Replaces existing mv-wg-* interfaces with {len(relays)} peer(s).",
-        f":local privKey \"{WG_PRIVATE_KEY}\"",
-        f":local clientIp \"{WG_CLIENT_IPV4}\"",
+        f":local privKey \"{private_key}\"",
+        f":local clientIp \"{client_ipv4}\"",
         "",
         "# 1. پاک‌سازی کامل تمام اینترفیس‌ها، روت‌ها و قوانین قبلی مربوط به mv-wg-",
         ":do { /ip firewall mangle remove [find where new-routing-mark~\"^mv-wg-\"] } on-error={}",
@@ -182,24 +198,25 @@ def select_relays(data):
 
 
 def main():
+    private_key, client_ipv4 = load_wireguard_settings()
     catalog = get_relays_data()
-    peer_relays = select_relays(catalog) if WG_PRIVATE_KEY else []
-    if WG_PRIVATE_KEY and peer_relays:
-        if not WG_CLIENT_IPV4 or "/" not in WG_CLIENT_IPV4:
+    peer_relays = select_relays(catalog) if private_key else []
+    if private_key and peer_relays:
+        if not client_ipv4 or "/" not in client_ipv4:
             raise SystemExit("Set WG_CLIENT_IPV4 to the IPv4 address with prefix from your Mullvad config.")
         try:
-            ipaddress.IPv4Interface(WG_CLIENT_IPV4)
+            ipaddress.IPv4Interface(client_ipv4)
         except ValueError:
             raise SystemExit("WG_CLIENT_IPV4 must be a valid IPv4 address with prefix.") from None
 
     endpoint_count = generate_routes_rsc(catalog)
     print(f"Generated '{OUTPUT_ROUTES_FILE}' ({endpoint_count} endpoint IPv4 routes).")
     if peer_relays:
-        generate_interfaces_rsc(peer_relays, OUTPUT_IFACES_FILE)
-        generate_interfaces_rsc(peer_relays[:1], OUTPUT_SIMPLE_FILE)
+        generate_interfaces_rsc(peer_relays, OUTPUT_IFACES_FILE, private_key, client_ipv4)
+        generate_interfaces_rsc(peer_relays[:1], OUTPUT_SIMPLE_FILE, private_key, client_ipv4)
         print(f"Generated '{OUTPUT_IFACES_FILE}' for {len(peer_relays)} peers.")
         print(f"Generated '{OUTPUT_SIMPLE_FILE}' for testing {peer_relays[0]['hostname']}.")
-    elif WG_PRIVATE_KEY:
+    elif private_key:
         print("No active peer relays matched the selection.")
 
 if __name__ == "__main__":

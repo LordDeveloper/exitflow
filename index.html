@@ -1071,7 +1071,9 @@
     const peerTests = new Map();
     let relayPingOrderDirty = false;
     const LIVE_TEST_DISPLAY_MS = 60_000;
-    let lastAutomaticPing = -Infinity;
+    const PEER_PING_REFRESH_MS = 15_000;
+    const PEER_PING_TICK_MS = 1500;
+    let peerPingTimer = null;
 
     let prevIfaceStats = new Map();
     let prevClientBytes = new Map();
@@ -2498,8 +2500,9 @@
         const countNum = Math.min(20, Math.max(1, Number(customCount) || 3));
         const selectedVal = document.getElementById('pathTestPeerValue');
         if (selectedVal && !automatic) selectedVal.dataset.activePeer = name;
-        const previousAvg = peerTests.get(name)?.avg;
-        peerTests.set(name, { state: 'running', automatic, avg: previousAvg, text: `در حال فرستادن ${countNum} بسته به ${target}…` });
+        const previous = peerTests.get(name);
+        const previousAvg = previous?.avg;
+        peerTests.set(name, { state: 'running', automatic, avg: previousAvg, checkedAt: previous?.checkedAt, text: `در حال فرستادن ${countNum} بسته به ${target}…` });
         paintPeerTest(name);
         const routed = { address: target, count: String(countNum), interval: '300ms', interface: name };
         if (srcAddress) routed['src-address'] = srcAddress;
@@ -3095,11 +3098,14 @@
     function startLiveTimer() {
         stopLiveTimer();
         liveTimer = setInterval(() => { poll(); }, POLL_MS);
+        peerPingTimer = setInterval(scheduleVisiblePeerPing, PEER_PING_TICK_MS);
     }
 
     function stopLiveTimer() {
         if (liveTimer) clearInterval(liveTimer);
+        if (peerPingTimer) clearInterval(peerPingTimer);
         liveTimer = null;
+        peerPingTimer = null;
     }
 
     function resetSpeedWindow() {
@@ -4818,24 +4824,24 @@
             : { state: 'problem', text: 'آفلاین' };
     }
 
-    function scheduleVisiblePeerPing(cards, models, now) {
-        if (!monitoring || !isLive || document.hidden || busy || relayBusy || now - lastAutomaticPing < 2000
-            || [...peerTests.values()].some(test => test.state === 'running')) return;
+    function scheduleVisiblePeerPing() {
+        if (!monitoring || document.hidden || document.getElementById('tabWireguard').hidden
+            || busy || relayBusy || [...peerTests.values()].some(test => test.state === 'running')) return;
+        const now = Date.now();
+        const interfaces = new Map([...(installedRelays?.values() || [])].map(iface => [iface.name, iface]));
         let candidate = null;
         let oldest = Infinity;
-        for (const card of cards) {
+        for (const card of relayManagement.querySelectorAll('[data-relay-interface]')) {
+            if (!card.getClientRects().length) continue;
             const name = card.dataset.relayInterface;
-            const model = models.get(name);
-            if (!model || model.disabled) continue;
-            const checkedAt = peerTests.get(name)?.checkedAt || 0;
-            if (now - checkedAt < LIVE_TEST_DISPLAY_MS || checkedAt >= oldest) continue;
+            const iface = interfaces.get(name);
+            if (!iface || isTrue(iface.disabled)) continue;
+            const checkedAt = peerTests.get(name)?.checkedAt ?? -Infinity;
+            if (now - checkedAt < PEER_PING_REFRESH_MS || checkedAt >= oldest) continue;
             candidate = name;
             oldest = checkedAt;
         }
-        if (candidate) {
-            lastAutomaticPing = now;
-            void testPeerPath(candidate, undefined, undefined, 1, true);
-        }
+        if (candidate) void testPeerPath(candidate, undefined, undefined, 1, true);
     }
 
     function updateRelayCardStats() {
@@ -4862,8 +4868,8 @@
             const metrics = {
                 health: model?.health.ageText || model?.health.text || '—',
                 clients: model ? String(model.clients.length) : '—',
-                latency: model?.disabled ? 'خاموش' : test?.state === 'running' ? 'در حال تست…'
-                    : test?.avg || (test?.state === 'fail' ? 'بی‌پاسخ' : 'در صف تست'),
+                latency: model?.disabled ? 'خاموش' : test?.avg
+                    || (test?.state === 'running' ? 'در حال تست…' : test?.state === 'fail' ? 'بی‌پاسخ' : 'در صف تست'),
                 rxSpeed: model ? formatSpeed(model.stats.rxSpeed) : '—',
                 txSpeed: model ? formatSpeed(model.stats.txSpeed) : '—',
                 rx: model ? formatBytes(model.stats.rx) : '',
@@ -4873,12 +4879,10 @@
                 setText(field, metrics[field.dataset.metric]);
             }
             const recent = test?.checkedAt && now - test.checkedAt <= LIVE_TEST_DISPLAY_MS;
-            const result = recent
-                ? `${new Date(test.checkedAt).toLocaleTimeString('fa-IR')} · ${test.text}`
-                : test?.state === 'running' ? test.text : '';
+            const result = test?.state === 'running' ? test.text
+                : recent ? `${new Date(test.checkedAt).toLocaleTimeString('fa-IR')} · ${test.text}` : '';
             setText(card.querySelector('[data-relay-result]'), result);
         }
-        scheduleVisiblePeerPing(cards, models, now);
     }
 
     function mutateRelay(action) {

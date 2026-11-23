@@ -43,7 +43,11 @@ def get_relays_data():
         return json.loads(response.read().decode("utf-8"))
 
 def generate_routes_rsc(relays):
-    endpoints = sorted({ipaddress.IPv4Address(r["ipv4_addr_in"]) for r in relays})
+    endpoints = sorted({
+        ipaddress.IPv4Address(relay["ipv4_addr_in"])
+        for relay in relays
+        if relay.get("ipv4_addr_in")
+    })
     if not endpoints:
         raise ValueError("No Mullvad IPv4 endpoints selected")
 
@@ -100,6 +104,7 @@ def generate_routes_rsc(relays):
     ]
     with open(OUTPUT_ROUTES_FILE, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(lines) + "\n")
+    return len(endpoints)
 
 def generate_interfaces_rsc(relays, output_file):
     lines = [
@@ -177,8 +182,9 @@ def select_relays(data):
 
 
 def main():
-    relays = select_relays(get_relays_data())
-    if WG_PRIVATE_KEY:
+    catalog = get_relays_data()
+    peer_relays = select_relays(catalog) if WG_PRIVATE_KEY else []
+    if WG_PRIVATE_KEY and peer_relays:
         if not WG_CLIENT_IPV4 or "/" not in WG_CLIENT_IPV4:
             raise SystemExit("Set WG_CLIENT_IPV4 to the IPv4 address with prefix from your Mullvad config.")
         try:
@@ -186,13 +192,15 @@ def main():
         except ValueError:
             raise SystemExit("WG_CLIENT_IPV4 must be a valid IPv4 address with prefix.") from None
 
-    generate_routes_rsc(relays)
-    print(f"Generated '{OUTPUT_ROUTES_FILE}' ({len(relays)} endpoints).")
-    if WG_PRIVATE_KEY:
-        generate_interfaces_rsc(relays, OUTPUT_IFACES_FILE)
-        generate_interfaces_rsc(relays[:1], OUTPUT_SIMPLE_FILE)
-        print(f"Generated '{OUTPUT_IFACES_FILE}' for full peer provisioning.")
-        print(f"Generated '{OUTPUT_SIMPLE_FILE}' for testing {relays[0]['hostname']}.")
+    endpoint_count = generate_routes_rsc(catalog)
+    print(f"Generated '{OUTPUT_ROUTES_FILE}' ({endpoint_count} endpoint IPv4 routes).")
+    if peer_relays:
+        generate_interfaces_rsc(peer_relays, OUTPUT_IFACES_FILE)
+        generate_interfaces_rsc(peer_relays[:1], OUTPUT_SIMPLE_FILE)
+        print(f"Generated '{OUTPUT_IFACES_FILE}' for {len(peer_relays)} peers.")
+        print(f"Generated '{OUTPUT_SIMPLE_FILE}' for testing {peer_relays[0]['hostname']}.")
+    elif WG_PRIVATE_KEY:
+        print("No active peer relays matched the selection.")
 
 if __name__ == "__main__":
     main()

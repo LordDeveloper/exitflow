@@ -83,6 +83,12 @@
         }
         .user-bar[hidden] { display: none; }
         .user-bar strong { color: #6ee7b7; }
+        .account-menu { position: relative; }
+        .account-menu summary { cursor: pointer; padding: 6px; }
+        .account-actions { position: absolute; z-index: 30; inset-inline-end: 0; top: 100%; display: grid; gap: 6px; min-width: 110px; padding: 8px; background: #152033; border: 1px solid var(--border); border-radius: 8px; }
+        #panelResetDialog { width: min(420px, calc(100% - 32px)); background: #152033; color: inherit; border: 1px solid var(--border); border-radius: 12px; padding: 18px; }
+        #panelResetDialog::backdrop { background: #080d17b3; }
+        #panelResetForm { display: grid; gap: 10px; }
         .status-strip {
             background: var(--card);
             border: 1px solid var(--border);
@@ -697,8 +703,13 @@
         </div>
         <div class="head-right">
             <div class="user-bar" id="userBar" hidden>
-                <span>خوش آمدید <strong id="loggedUserLabel">admin</strong></span>
-                <button type="button" id="logoutBtn" class="danger compact">خروج</button>
+                <details id="accountMenu" class="account-menu">
+                    <summary><strong id="loggedUserLabel">admin</strong></summary>
+                    <div class="account-actions">
+                        <button type="button" id="panelResetBtn" class="danger compact">ریست</button>
+                        <button type="button" id="logoutBtn" class="compact">خروج</button>
+                    </div>
+                </details>
             </div>
             <div id="routerMeta"></div>
         </div>
@@ -1118,6 +1129,20 @@
         </div>
     </div>
 </div>
+
+<dialog id="panelResetDialog" aria-labelledby="panelResetTitle">
+    <form id="panelResetForm">
+        <h2 id="panelResetTitle">ریست پنل</h2>
+        <p>اطلاعات ورود و تنظیمات محلی پنل پاک می‌شوند. تنظیمات روی CHR باقی می‌مانند.</p>
+        <label for="panelResetInput">برای تأیید، <bdi>CONFIRM</bdi> بنویسید.</label>
+        <input id="panelResetInput" dir="ltr" autocomplete="off" autofocus>
+        <div>
+            <button type="submit" id="panelResetApply" class="danger" disabled>ریست پنل</button>
+            <button type="button" id="panelResetCancel">انصراف</button>
+        </div>
+        <p id="panelResetStatus" role="status"></p>
+    </form>
+</dialog>
 
 <script>
     const LS_IP = 'mullvadDash.routerIp';
@@ -3781,8 +3806,55 @@
     }
 
     document.getElementById('connectBtn').addEventListener('click', connectAndStart);
+    const accountMenu = document.getElementById('accountMenu');
+    const panelResetDialog = document.getElementById('panelResetDialog');
+    const panelResetInput = document.getElementById('panelResetInput');
+    const panelResetApply = document.getElementById('panelResetApply');
+    const panelResetCancel = document.getElementById('panelResetCancel');
+    const panelResetStatus = document.getElementById('panelResetStatus');
+
+    document.addEventListener('click', event => {
+        if (accountMenu.open && !accountMenu.contains(event.target)) accountMenu.open = false;
+    });
+    accountMenu.addEventListener('keydown', event => {
+        if (event.key !== 'Escape' || !accountMenu.open) return;
+        accountMenu.open = false;
+        accountMenu.querySelector('summary').focus();
+    });
     document.getElementById('logoutBtn').addEventListener('click', () => {
+        accountMenu.open = false;
         forceLogout('از حساب خارج شدید.', false);
+    });
+    document.getElementById('panelResetBtn').addEventListener('click', () => {
+        accountMenu.open = false;
+        panelResetInput.value = '';
+        panelResetApply.disabled = true;
+        panelResetStatus.textContent = '';
+        panelResetDialog.showModal();
+    });
+    panelResetInput.addEventListener('input', () => {
+        panelResetApply.disabled = panelResetInput.value !== 'CONFIRM';
+    });
+    panelResetCancel.addEventListener('click', () => panelResetDialog.close());
+    panelResetDialog.addEventListener('cancel', event => {
+        if (panelResetInput.disabled) event.preventDefault();
+    });
+    panelResetDialog.addEventListener('close', () => accountMenu.querySelector('summary').focus());
+    document.getElementById('panelResetForm').addEventListener('submit', async event => {
+        event.preventDefault();
+        if (panelResetInput.disabled || panelResetInput.value !== 'CONFIRM') return;
+        panelResetInput.disabled = panelResetApply.disabled = panelResetCancel.disabled = true;
+        panelResetStatus.textContent = 'در حال ریست پنل…';
+        try {
+            await localDashboard('reset', { confirmation: panelResetInput.value });
+            for (const key of [LS_IP, LS_USER, LS_PASS, LS_LOGGED_IN, LS_WIRED]) {
+                try { localStorage.removeItem(key); } catch (error) { /* private mode */ }
+            }
+            window.location.reload();
+        } catch (error) {
+            panelResetStatus.textContent = error.message;
+            panelResetInput.disabled = panelResetApply.disabled = panelResetCancel.disabled = false;
+        }
     });
     document.getElementById('liveToggleBtn').addEventListener('click', toggleLive);
     document.getElementById('mainTabs').addEventListener('click', (event) => {

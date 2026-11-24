@@ -555,6 +555,8 @@
         .chr-dhcp-card header { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
         .chr-dhcp-card dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 12px; margin: 0; }
         .chr-dhcp-card dd { margin: 0; overflow-wrap: anywhere; }
+        .chr-dhcp-networks { margin-block-start: 14px; }
+        .chr-dhcp-networks summary { cursor: pointer; margin-block-end: 8px; }
         @media (max-width: 520px) { #chrDhcpForm { grid-template-columns: minmax(0, 1fr); } }
         .relay-settings label { display: grid; gap: 6px; font-size: 13px; }
         .relay-toolbar { grid-template-columns: minmax(150px, 2fr) repeat(3, minmax(118px, 1fr)) auto; }
@@ -959,6 +961,10 @@
             <p id="chrDhcpStatus" role="status"></p>
             <h3>سرورهای DHCP</h3>
             <div id="chrDhcpServers" class="chr-dhcp-cards"></div>
+            <details class="chr-dhcp-networks">
+                <summary>DHCP Networks</summary>
+                <div id="chrDhcpNetworks" class="chr-dhcp-cards"></div>
+            </details>
         </section>
     </div>
 
@@ -2926,7 +2932,7 @@
         if (!monitoring) throw new Error('ابتدا به CHR متصل شوید.');
         const [addresses, servers, interfaces, members, pools, leases, arp, networks] = await Promise.all([
             apiList('/ip/address?.proplist=.id,address,interface,dynamic,disabled,invalid,comment'),
-            apiList('/ip/dhcp-server?.proplist=.id,name,interface,disabled,invalid,address-pool'),
+            apiList('/ip/dhcp-server?.proplist=.id,name,interface,disabled,invalid,address-pool,relay'),
             apiList('/interface?.proplist=name,type,disabled,slave'),
             apiList('/interface/list/member?.proplist=list,interface'),
             apiList('/ip/pool?.proplist=.id,name,ranges,next-pool,comment'),
@@ -2960,8 +2966,9 @@
         if (chrDhcpRefresh.disabled) return;
         const status = document.getElementById('chrDhcpStatus');
         const list = document.getElementById('chrDhcpServers');
+        const networks = document.getElementById('chrDhcpNetworks');
         chrDhcpModem.disabled = chrDhcpRefresh.disabled = chrDhcpPrepare.disabled = chrDhcpInterface.disabled = true;
-        for (const button of list.querySelectorAll('button')) button.disabled = true;
+        for (const button of [...list.querySelectorAll('button'), ...networks.querySelectorAll('button')]) button.disabled = true;
         status.textContent = 'در حال ارتباط با CHR…';
         let state;
         try {
@@ -2990,6 +2997,8 @@
             }
             if (selected && [...chrDhcpInterface.options].some(option => option.value === selected)) chrDhcpInterface.value = selected;
             for (const server of state?.servers || []) list.append(buildChrDhcpCard(server, state.pools));
+            networks.replaceChildren();
+            if (state) renderChrDhcpNetworks(networks, state);
             if (state && !state.servers.length) list.textContent = 'سرور DHCP روی CHR ثبت نشده است.';
             chrDhcpState = state;
             chrDhcpModem.disabled = chrDhcpRefresh.disabled = chrDhcpInterface.disabled = false;
@@ -2999,6 +3008,62 @@
             } else {
                 updateChrGateway();
             }
+        }
+    }
+
+    function chrDhcpNetworkInUse(network, state) {
+        const bounds = chrDhcpSubnetBounds(network.address);
+        if (!bounds) return true;
+        const [first, last] = bounds;
+        const includesIp = ip => isIpv4(ip) && chrIpNumber(ip) >= first && chrIpNumber(ip) <= last;
+        if (state.leases.some(row => includesIp(row.address) || includesIp(row['active-address']))) return true;
+        return state.servers.some(server => {
+            const visited = new Set();
+            let poolName = server['address-pool'];
+            while (poolName && !visited.has(poolName)) {
+                visited.add(poolName);
+                const pool = state.pools.find(row => row.name === poolName);
+                if (!pool) break;
+                if (chrPoolRanges(pool).some(([start, end]) => chrIpNumber(start) <= last && chrIpNumber(end) >= first)) return true;
+                poolName = pool['next-pool'];
+            }
+            if (server['address-pool'] && server['address-pool'] !== 'static-only') return false;
+            if (server.relay && server.relay !== '0.0.0.0') return true;
+            return state.allAddresses.some(row => row.interface === server.interface
+                && includesIp(ipOnly(row.address)));
+        });
+    }
+
+    function renderChrDhcpNetworks(container, state) {
+        if (!state.networks.length) container.textContent = 'رکوردی در DHCP Networks وجود ندارد.';
+        for (const network of state.networks) {
+            const card = document.createElement('article');
+            card.className = 'chr-dhcp-card';
+            const title = document.createElement('strong');
+            title.textContent = network.address;
+            const gateway = document.createElement('span');
+            gateway.textContent = network.gateway ? 'Gateway · ' + network.gateway : '';
+            const inUse = chrDhcpNetworkInUse(network, state);
+            const description = document.createElement('span');
+            description.textContent = inUse ? 'وابسته به DHCP یا Lease موجود' : 'بلااستفاده';
+            card.append(title, gateway, description);
+            if (!inUse) {
+                const actions = document.createElement('footer');
+                actions.className = 'relay-actions';
+                actions.append(relayButton('حذف رکورد', 'danger', () => {
+                    if (!window.confirm(`رکورد DHCP Network برای ${network.address} حذف شود؟`)) return;
+                    void runChrDhcpAction(async currentState => {
+                        const current = currentState.networks.find(row => row['.id'] === network['.id'] && row.address === network.address);
+                        if (!current || chrDhcpNetworkInUse(current, currentState)) {
+                            throw new Error('رکورد تغییر کرده یا هنوز به DHCP وابسته است.');
+                        }
+                        await deleteById('/ip/dhcp-server/network', current['.id']);
+                        return `رکورد DHCP Network برای ${current.address} حذف شد.`;
+                    });
+                }));
+                card.append(actions);
+            }
+            container.append(card);
         }
     }
 

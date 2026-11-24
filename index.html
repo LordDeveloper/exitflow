@@ -963,6 +963,8 @@
             <div id="chrDhcpServers" class="chr-dhcp-cards"></div>
             <details class="chr-dhcp-networks">
                 <summary>DHCP Networks</summary>
+                <button type="button" id="chrInternetCheck">بررسی مسیر اینترنت و NAT</button>
+                <p id="chrInternetResult" role="status"></p>
                 <div id="chrDhcpNetworks" class="chr-dhcp-cards"></div>
             </details>
         </section>
@@ -3034,6 +3036,47 @@
         });
     }
 
+    function chrGatewayCandidates(network, state) {
+        const bounds = chrDhcpSubnetBounds(network.address);
+        if (!bounds) return [];
+        const [first, last] = bounds;
+        return [...new Set(state.allAddresses.filter(row => !isTrue(row.disabled) && !isTrue(row.invalid)
+            && chrDhcpSubnetBounds(row.address)?.every((value, index) => value === bounds[index]))
+            .map(row => ipOnly(row.address)).filter(ip => isIpv4(ip) && chrIpNumber(ip) > first && chrIpNumber(ip) < last))];
+    }
+
+    async function applyChrNetworkGateway(network, gateway, state) {
+        const current = state.networks.find(row => row['.id'] === network['.id'] && row.address === network.address);
+        if (!current || current.gateway !== network.gateway || !chrGatewayCandidates(current, state).includes(gateway)) {
+            throw new Error('وضعیت شبکه یا IP رابط تغییر کرده است. فهرست را دوباره بررسی کنید.');
+        }
+        await apiFetch('/ip/dhcp-server/network/' + assertId(current['.id']), 'PATCH', { gateway });
+    }
+
+    async function checkChrInternetPath(output, button) {
+        button.disabled = true;
+        output.textContent = 'در حال خواندن مسیر و NAT…';
+        try {
+            const [routes, rules] = await Promise.all([
+                apiList('/ip/route?.proplist=dst-address,routing-table,active,gateway,immediate-gw'),
+                apiList('/ip/firewall/nat?.proplist=chain,action,disabled,out-interface,out-interface-list,src-address,bytes')
+            ]);
+            const gateways = routes.filter(row => row['dst-address'] === '0.0.0.0/0'
+                && row['routing-table'] === 'main' && isTrue(row.active)).map(row => row['immediate-gw'] || row.gateway);
+            const nat = rules.filter(row => row.chain === 'srcnat' && !isTrue(row.disabled)
+                && ['src-nat', 'masquerade'].includes(row.action));
+            const routeText = gateways.length ? 'مسیر پیش‌فرض فعال: ' + gateways.join('، ') : 'مسیر پیش‌فرض فعال در main پیدا نشد.';
+            const natText = nat.length ? nat.map(row => [row.action, row['src-address'] || 'همهٔ مبدأها',
+                row['out-interface'] || row['out-interface-list'] || 'همهٔ خروجی‌ها', (row.bytes || '0') + ' B'].join(' · ')).join(' / ')
+                : 'قانون srcnat فعال پیدا نشد.';
+            output.textContent = routeText + ' | NAT: ' + natText;
+        } catch (error) {
+            output.textContent = error.message;
+        } finally {
+            button.disabled = false;
+        }
+    }
+
     function renderChrDhcpNetworks(container, state) {
         if (!state.networks.length) container.textContent = 'رکوردی در DHCP Networks وجود ندارد.';
         for (const network of state.networks) {
@@ -3047,6 +3090,26 @@
             const description = document.createElement('span');
             description.textContent = inUse ? 'وابسته به DHCP یا Lease موجود' : 'بلااستفاده';
             card.append(title, gateway, description);
+            const candidates = chrGatewayCandidates(network, state).filter(ip => ip !== network.gateway);
+            if (candidates.length) {
+                const actions = document.createElement('div');
+                actions.className = 'relay-actions';
+                const selector = document.createElement('select');
+                selector.setAttribute('aria-label', 'آدرس CHR برای Gateway شبکهٔ ' + network.address);
+                for (const ip of candidates) selector.add(new Option(ip, ip));
+                const apply = relayButton('استفاده از CHR به‌عنوان Gateway', 'info', () => {
+                    const nextGateway = selector.value;
+                    if (!window.confirm(`Gateway شبکهٔ ${network.address} به ${nextGateway} تغییر کند؟ کلاینت‌ها باید Lease را تمدید کنند.`)) return;
+                    void runChrDhcpAction(next => applyChrNetworkGateway(network, nextGateway, next), ({ networks }) => {
+                        const current = networks.find(row => row['.id'] === network['.id']);
+                        return current?.gateway === nextGateway
+                            ? `Gateway شبکهٔ ${network.address} به ${nextGateway} تغییر کرد. اتصال Wi‑Fi کلاینت را دوباره برقرار کنید.`
+                            : 'CHR تغییر Gateway را تأیید نکرد.';
+                    });
+                });
+                actions.append(selector, apply);
+                card.append(actions);
+            }
             if (!inUse) {
                 const actions = document.createElement('footer');
                 actions.className = 'relay-actions';
@@ -3487,6 +3550,14 @@
         await apiFetch('/ip/dhcp-server', 'PUT', { name, interface: iface, 'address-pool': name, disabled: 'yes' });
     }
 
+    document.getElementById('chrInternetCheck').addEventListener('click', event => {
+        const output = document.getElementById('chrInternetResult');
+        if (!monitoring) {
+            output.textContent = 'ابتدا به CHR متصل شوید.';
+            return;
+        }
+        void checkChrInternetPath(output, event.currentTarget);
+    });
     chrDhcpRefresh.addEventListener('click', () => void runChrDhcpAction());
     chrDhcpModem.addEventListener('change', () => void runChrDhcpAction());
     const chrDnsPicker = document.getElementById('chrDnsPicker');

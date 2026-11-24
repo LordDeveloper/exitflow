@@ -3853,7 +3853,9 @@
             await runRelayAction(async () => {
                 let result;
                 try {
-                    result = await resetMullvadPeers();
+                    result = await resetMullvadPeers((finished, total) => {
+                        peerResetStatus.textContent = `بررسی‌شده: ${finished} از ${total}`;
+                    });
                 } catch (error) {
                     peerResetStatus.textContent = error.message;
                     throw error;
@@ -5676,24 +5678,31 @@
         await setPeerDisabledState(iface, false);
     }
 
-    async function resetMullvadPeers() {
+    async function resetMullvadPeers(onProgress) {
         const interfaces = await apiList('/interface/wireguard?.proplist=.id,name');
         const nodes = interfaces.filter(row => String(row.name || '').startsWith('mv-wg-'));
+        const snapshots = new Map();
+        const readOnce = path => {
+            if (!snapshots.has(path)) snapshots.set(path, apiList(path));
+            return snapshots.get(path);
+        };
         const failed = [];
         let removed = 0;
-        for (const node of nodes) {
+        const batchSize = 4;
+        for (let start = 0; start < nodes.length; start += batchSize) {
             if (!monitoring) throw new Error('اتصال به روتر قطع شد. وضعیت پیرها را دوباره بررسی کنید.');
-            try {
-                await removeCatalogRelay(node);
-                removed += 1;
-            } catch (error) {
-                failed.push(node.name + ': ' + error.message);
-            }
+            const batch = nodes.slice(start, start + batchSize);
+            const results = await Promise.allSettled(batch.map(node => removeCatalogRelay(node, readOnce)));
+            results.forEach((result, index) => {
+                if (result.status === 'fulfilled') removed += 1;
+                else failed.push(batch[index].name + ': ' + result.reason.message);
+            });
+            onProgress(removed + failed.length, nodes.length);
         }
         return { removed, failed };
     }
 
-    async function removeCatalogRelay(iface) {
+    async function removeCatalogRelay(iface, readRecords = apiList) {
         const name = iface.name;
         const targets = [
             ['/ip/firewall/mangle', 'new-routing-mark', row => row['new-routing-mark'] === name],
@@ -5706,7 +5715,7 @@
             ['/interface/wireguard/peers', 'interface,endpoint-address,current-endpoint-address', row => row.interface === name],
             ['/ip/address', 'interface,dynamic', row => row.interface === name && !isTrue(row.dynamic)]
         ];
-        const records = await Promise.all(targets.map(([path, fields]) => apiList(path + '?.proplist=.id,' + fields)));
+        const records = await Promise.all(targets.map(([path, fields]) => readRecords(path + '?.proplist=.id,' + fields)));
         const peerIndex = targets.findIndex(([path]) => path === '/interface/wireguard/peers');
         const oldPeers = records[peerIndex].filter(targets[peerIndex][2]);
         for (const [index, [path, , matches]] of targets.entries()) {

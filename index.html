@@ -538,9 +538,13 @@
         .relay-settings { margin: 12px 0; }
         #chrDhcpForm { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         #chrDhcpForm select { width: 100%; min-width: 0; }
-        .chr-dns { grid-column: 1 / -1; min-width: 0; }
-        .chr-dns summary { cursor: pointer; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; }
-        .chr-dns-menu { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; }
+        .chr-dns { position: relative; grid-column: 1 / -1; width: min(100%, 300px); min-width: 0; }
+        #chrDhcpPrepare, #chrDhcpEditCancel { justify-self: start; width: auto; }
+        .chr-dns summary { cursor: pointer; padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .chr-dns-menu { position: absolute; z-index: 12; inset-inline: 0; top: calc(100% + 4px); display: grid; gap: 6px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: #152033; box-shadow: 0 8px 24px #080d1777; }
+        .chr-dns-menu input, .chr-dns-options button { padding: 6px 8px; min-height: 0; }
+        #chrDnsError:empty, #chrDhcpFormHint:empty { display: none; }
+        #chrDhcpFormHint { grid-column: 1 / -1; margin: 0; }
         .chr-dns-options { display: grid; gap: 4px; max-height: 200px; overflow-y: auto; }
         .chr-dns-options button { text-align: start; background: var(--panel); border: 1px solid var(--border); }
         .chr-dns-options button[aria-pressed="true"] { border-color: #60a5fa; background: #1d3558; }
@@ -948,7 +952,7 @@
                         </div>
                     </div>
                 </details>
-                <button type="button" id="chrDhcpSuggest" disabled>پیشنهاد دوباره</button>
+                <p id="chrDhcpFormHint" class="muted" role="status"></p>
                 <button type="submit" id="chrDhcpPrepare" disabled>ساخت DHCP غیرفعال</button>
                 <button type="button" id="chrDhcpEditCancel" hidden>انصراف از ویرایش</button>
             </form>
@@ -2916,7 +2920,6 @@
     const chrDhcpReady = document.getElementById('chrDhcpReady');
     const chrDhcpPrepare = document.getElementById('chrDhcpPrepare');
     const chrDhcpRefresh = document.getElementById('chrDhcpRefresh');
-    const chrDhcpSuggest = document.getElementById('chrDhcpSuggest');
     let chrDhcpState;
     let editingChrDhcp;
     const chrDhcpEditCancel = document.getElementById('chrDhcpEditCancel');
@@ -2959,7 +2962,7 @@
         if (chrDhcpRefresh.disabled) return;
         const status = document.getElementById('chrDhcpStatus');
         const list = document.getElementById('chrDhcpServers');
-        chrDhcpSuggest.disabled = chrDhcpModem.disabled = chrDhcpRefresh.disabled = chrDhcpPrepare.disabled = chrDhcpInterface.disabled = true;
+        chrDhcpModem.disabled = chrDhcpRefresh.disabled = chrDhcpPrepare.disabled = chrDhcpInterface.disabled = true;
         for (const button of list.querySelectorAll('button')) button.disabled = true;
         status.textContent = 'در حال ارتباط با CHR…';
         let state;
@@ -2995,7 +2998,7 @@
             chrDhcpState = state;
             chrDhcpModem.disabled = chrDhcpRefresh.disabled = chrDhcpInterface.disabled = false;
             updateChrDhcpForm();
-            if (!chrDhcpSuggest.disabled && (selected !== chrDhcpInterface.value || !chrGateway.value)) {
+            if (!chrDhcpPrepare.disabled && (selected !== chrDhcpInterface.value || !chrGateway.value)) {
                 suggestChrDhcp();
             } else {
                 updateChrGateway();
@@ -3092,12 +3095,24 @@
         document.getElementById('chrDhcpNewSubnetField').hidden = !createSubnet;
         const newAddress = createSubnet ? chrNewSubnetAddress(chrGateway.value.trim()) : '';
         chrDhcpNewSubnet.value = newAddress;
+        const matching = chrDhcpState?.servers.filter(row => row.interface === iface) || [];
+        const server = chrDhcpTarget(chrDhcpState, iface);
         chrDhcpEditCancel.hidden = !editingChrDhcp;
-        chrDhcpPrepare.textContent = editingChrDhcp ? 'ذخیرهٔ محدوده' : 'ساخت DHCP غیرفعال';
-        chrDhcpSuggest.disabled = chrDhcpPrepare.disabled = !chrDhcpState || !iface
-            || chrDhcpRefresh.disabled || (createSubnet && !newAddress) || (editingChrDhcp
-                ? iface !== editingChrDhcp.interface
-                : chrDhcpState.servers.some(row => row.interface === iface));
+        chrDhcpPrepare.textContent = server ? 'ذخیرهٔ تغییرات DHCP' : 'ساخت DHCP غیرفعال';
+        let reason = '';
+        if (!chrDhcpState || !iface || chrDhcpRefresh.disabled) reason = '';
+        else if (editingChrDhcp && !server) reason = 'برای ادامهٔ ویرایش، رابط همان سرور را انتخاب کنید.';
+        else if (matching.length > 1 && !server) reason = 'روی این رابط چند سرور وجود دارد. سرور را از کارت خودش برای ویرایش باز کنید.';
+        else if (createSubnet && !newAddress) reason = 'Gateway معتبر وارد کنید تا subnet جدید محاسبه شود.';
+        chrDhcpPrepare.disabled = !chrDhcpState || !iface || chrDhcpRefresh.disabled || Boolean(reason);
+        const hint = document.getElementById('chrDhcpFormHint');
+        hint.textContent = reason || (server ? `سرور موجود روی ${iface} به‌روزرسانی می‌شود (${server.name}).` : '');
+    }
+
+    function chrDhcpTarget(state, iface) {
+        if (editingChrDhcp) return editingChrDhcp.interface === iface ? editingChrDhcp : null;
+        const matching = state?.servers.filter(row => row.interface === iface) || [];
+        return matching.length === 1 ? matching[0] : null;
     }
 
     function chrNewSubnetAddress(gateway) {
@@ -3190,7 +3205,8 @@
             const { subnet } = chrSubnet(address, host);
             const existing = chrDhcpState.networks.find(row => row.address === subnet);
             if (currentAddress) chrGateway.value = existing?.gateway || host;
-            const previousPool = !editingChrDhcp && chrDhcpState.pools.find(row => row.name === chrDhcpServerName(iface));
+            const target = chrDhcpTarget(chrDhcpState, iface);
+            const previousPool = chrDhcpState.pools.find(row => row.name === (target?.['address-pool'] || chrDhcpServerName(iface)));
             const count = chrDhcpForm.elements.count;
             if (!count.value && previousPool) count.value = chrPoolSize(previousPool) || '';
             const providers = [...chrDnsOptions.querySelectorAll('button[data-dns]')].filter(button => button.dataset.dns.includes(','));
@@ -3234,7 +3250,7 @@
         preview.textContent = '';
         if (!count.disabled && count.value && chrDhcpState) {
             try {
-                const server = chrDhcpState.servers.find(row => row['.id'] === editingChrDhcp?.['.id']);
+                const server = chrDhcpTarget(chrDhcpState, iface);
                 preview.textContent = calculateChrDhcpRanges(chrDhcpState, iface, address, chrGateway.value.trim(), Number(count.value), server);
             } catch (cause) {
                 count.setCustomValidity(cause.message);
@@ -3243,7 +3259,7 @@
         }
     }
 
-    async function prepareChrDhcp(form, state) {
+    async function prepareChrDhcp(form, state, target) {
         if (!chrDhcpInterface.value) throw new Error('یک رابط LAN انتخاب کنید.');
         const [iface, currentAddress] = JSON.parse(chrDhcpInterface.value);
         const values = new FormData(form);
@@ -3254,10 +3270,11 @@
             throw new Error('برای رابط LAN یک IPv4 ثابت معتبر انتخاب یا وارد کنید.');
         }
         const needsAddress = !state.addresses.some(row => row.interface === iface && row.address === address);
-        const server = editingChrDhcp && state.servers.find(row => row['.id'] === editingChrDhcp['.id']
-            && row.name === editingChrDhcp.name && row.interface === iface && row['address-pool'] === editingChrDhcp['address-pool']);
-        if (editingChrDhcp && !server) throw new Error('سرور تغییر کرده است. دوباره کارت را برای ویرایش باز کنید.');
-        if (state.servers.some(row => row !== server && row.interface === iface)) {
+        const server = target && state.servers.find(row => row['.id'] === target['.id']
+            && row.name === target.name && row.interface === iface && row['address-pool'] === target['address-pool']
+            && isTrue(row.disabled) === isTrue(target.disabled));
+        if (target && !server) throw new Error('وضعیت سرور تغییر کرده است. دوباره فرم را بررسی کنید.');
+        if (!server && state.servers.some(row => row.interface === iface)) {
             throw new Error('DHCP Server دیگری روی این رابط تعریف شده است.');
         }
         const count = Number(values.get('count'));
@@ -3381,10 +3398,9 @@
         editingChrDhcp = null;
         updateChrDhcpForm();
     });
-    chrDhcpSuggest.addEventListener('click', suggestChrDhcp);
     chrDhcpInterface.addEventListener('change', () => {
         updateChrDhcpForm();
-        if (!chrDhcpSuggest.disabled) suggestChrDhcp();
+        if (!chrDhcpPrepare.disabled) suggestChrDhcp();
         else updateChrGateway();
     });
     chrGateway.addEventListener('input', () => {
@@ -3395,7 +3411,7 @@
         const gateway = chrGateway.value.trim();
         if (isIpv4(gateway)) chrGateway.value = gateway.split('.').map(Number).join('.');
         updateChrDhcpForm();
-        if (chrDhcpInterface.value && !JSON.parse(chrDhcpInterface.value)[1] && !chrDhcpSuggest.disabled
+        if (chrDhcpInterface.value && !JSON.parse(chrDhcpInterface.value)[1] && !chrDhcpPrepare.disabled
             && !chrDnsSelect.selectedOptions.length) suggestChrDhcp();
         else updateChrGateway();
     });
@@ -3403,9 +3419,12 @@
     chrDhcpForm.addEventListener('submit', event => {
         event.preventDefault();
         const form = event.currentTarget;
-        if (editingChrDhcp && !isTrue(editingChrDhcp.disabled)
-            && !window.confirm('محدودهٔ سرور فعال تغییر می‌کند. کلاینت‌ها ممکن است لازم باشد اجارهٔ DHCP را تمدید کنند. ادامه می‌دهید؟')) return;
-        void runChrDhcpAction(state => prepareChrDhcp(form, state));
+        if (chrDhcpPrepare.disabled || !chrDhcpInterface.value) return;
+        const [iface] = JSON.parse(chrDhcpInterface.value);
+        const target = chrDhcpTarget(chrDhcpState, iface);
+        if (target && !isTrue(target.disabled)
+            && !window.confirm(`محدودهٔ سرور فعال «${target.name}» تغییر می‌کند. کلاینت‌ها ممکن است لازم باشد اجارهٔ DHCP را تمدید کنند. ادامه می‌دهید؟`)) return;
+        void runChrDhcpAction(state => prepareChrDhcp(form, state, target));
     });
     function emptyClientCards() {
         if (!monitoring) renderClientCards();

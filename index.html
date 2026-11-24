@@ -3086,7 +3086,7 @@
     async function readChrInternetConfiguration() {
         const [routes, rules] = await Promise.all([
             apiList('/ip/route?.proplist=dst-address,routing-table,active,disabled,gateway,immediate-gw'),
-            apiList('/ip/firewall/nat?.proplist=chain,action,disabled,out-interface,src-address,comment')
+            apiList('/ip/firewall/nat?.proplist=.id,chain,action,disabled,out-interface,src-address,to-addresses,comment')
         ]);
         return { routes, rules };
     }
@@ -3095,7 +3095,7 @@
         if (!state.internet) return 'unknown';
         const { rules, routes } = state.internet;
         const matchingNat = rules.filter(row => row.comment === chrInternetNatTag(network.address)
-            && row.chain === 'srcnat' && row.action === 'masquerade' && !isTrue(row.disabled)
+            && row.chain === 'srcnat' && ['src-nat', 'masquerade'].includes(row.action) && !isTrue(row.disabled)
             && row['src-address'] === network.address && row['out-interface']);
         if (!matchingNat.length) return 'missing';
         const defaults = routes.filter(row => row['dst-address'] === '0.0.0.0/0'
@@ -3111,8 +3111,24 @@
                     && bounds && ip > bounds[0] && ip < bounds[1];
             });
         };
-        return matchingNat.some(nat => defaults.length && defaults.every(route => routeOn(route, nat['out-interface'])))
-            ? 'configured' : 'no-route';
+        const routedNat = matchingNat.filter(nat => defaults.length && defaults.every(route => routeOn(route, nat['out-interface'])));
+        if (!routedNat.length) return 'no-route';
+        if (routedNat.some(nat => nat.action === 'src-nat' && defaults.every(route => {
+            const modem = String(route['immediate-gw'] || route.gateway || '').split('%')[0];
+            return chrModemAddresses(state, modem).some(row => row.interface === nat['out-interface']
+                && ipOnly(row.address) === nat['to-addresses']);
+        }))) return 'configured';
+        return 'legacy';
+    }
+
+    function chrModemAddresses(state, modem) {
+        if (!isIpv4(modem)) return [];
+        const modemIp = chrIpNumber(modem);
+        return state.allAddresses.filter(row => {
+            if (isTrue(row.disabled) || isTrue(row.invalid) || ipOnly(row.address) === modem) return false;
+            const bounds = chrDhcpSubnetBounds(row.address);
+            return bounds && modemIp > bounds[0] && modemIp < bounds[1];
+        });
     }
 
     async function prepareChrInternet(network, modem, state) {
@@ -3124,12 +3140,8 @@
         if (state.allAddresses.some(row => !isTrue(row.disabled) && ipOnly(row.address) === modem)) {
             throw new Error('Gateway مودم نباید یکی از IPهای خود CHR باشد.');
         }
-        const modemIp = chrIpNumber(modem);
-        const uplinks = new Set(state.allAddresses.filter(row => {
-            if (isTrue(row.disabled) || isTrue(row.invalid) || ipOnly(row.address) === modem) return false;
-            const bounds = chrDhcpSubnetBounds(row.address);
-            return bounds && modemIp > bounds[0] && modemIp < bounds[1];
-        }).map(row => row.interface));
+        const modemAddresses = chrModemAddresses(state, modem);
+        const uplinks = new Set(modemAddresses.map(row => row.interface));
         if (uplinks.size !== 1) throw new Error('CHR باید روی یک رابط مشخص، IP فعال در subnet مودم داشته باشد.');
         const [uplink] = uplinks;
         const { routes, rules } = state.internet || await readChrInternetConfiguration();
@@ -3145,23 +3157,33 @@
             });
         }
         const tag = chrInternetNatTag(current.address);
-        if (!rules.some(row => row.comment === tag && row.chain === 'srcnat' && !isTrue(row.disabled)
-            && row.action === 'masquerade' && row['src-address'] === current.address && row['out-interface'] === uplink)) {
-            await apiFetch('/ip/firewall/nat', 'PUT', {
-                chain: 'srcnat', action: 'masquerade', 'src-address': current.address, 'out-interface': uplink, comment: tag
+        const staticAddress = modemAddresses.find(row => !isTrue(row.dynamic));
+        const sourceIp = staticAddress && ipOnly(staticAddress.address);
+        const nat = {
+            chain: 'srcnat', action: sourceIp ? 'src-nat' : 'masquerade', 'src-address': current.address,
+            'out-interface': uplink, comment: tag
+        };
+        if (sourceIp) nat['to-addresses'] = sourceIp;
+        const existing = rules.find(row => row.comment === tag && row.chain === 'srcnat'
+            && ['src-nat', 'masquerade'].includes(row.action) && row['src-address'] === current.address);
+        if (!existing) {
+            await apiFetch('/ip/firewall/nat', 'PUT', nat);
+        } else if (isTrue(existing.disabled) || Object.entries(nat).some(([field, value]) => existing[field] !== value)) {
+            await apiFetch('/ip/firewall/nat/' + assertId(existing['.id']), 'PATCH', {
+                ...nat, 'to-addresses': sourceIp || '', disabled: 'no'
             });
         }
         const updated = await apiList('/ip/route?.proplist=dst-address,routing-table,active,gateway,immediate-gw');
         return updated.some(row => row['dst-address'] === '0.0.0.0/0' && row['routing-table'] === 'main'
             && isTrue(row.active) && viaModem(row))
-            ? `مسیر از مودم ${modem} فعال است و NAT برای ${current.address} آماده شد. اینترنت را از یک کلاینت آزمایش کنید.`
+            ? `مسیر از مودم ${modem} فعال است. NAT شبکهٔ ${current.address} با ${sourceIp || 'IP پویای رابط'} تنظیم شد. اینترنت را از یک کلاینت آزمایش کنید.`
             : 'NAT آماده شد، ولی CHR هنوز مسیر پیش‌فرض فعال از مودم را گزارش نکرد.';
     }
 
     async function removeChrNetworkNat(network) {
         const rules = await apiList('/ip/firewall/nat?.proplist=.id,chain,action,src-address,comment');
         for (const row of rules) {
-            if (row.chain === 'srcnat' && row.action === 'masquerade' && row['src-address'] === network.address
+            if (row.chain === 'srcnat' && ['src-nat', 'masquerade'].includes(row.action) && row['src-address'] === network.address
                 && row.comment === chrInternetNatTag(network.address)) await deleteById('/ip/firewall/nat', row['.id']);
         }
     }
@@ -3197,7 +3219,7 @@
                     const status = document.createElement('span');
                     status.textContent = internet === 'configured' ? 'مسیر و NAT مودم تنظیم شده' : 'خواندن وضعیت مسیر و NAT ناموفق بود';
                     card.append(status);
-                } else card.append(relayButton(internet === 'no-route' ? 'بررسی و تنظیم مسیر مودم' : 'تنظیم اینترنت از مودم', 'success', () => {
+                } else card.append(relayButton(internet === 'no-route' ? 'بررسی و تنظیم مسیر مودم' : internet === 'legacy' ? 'بازبینی NAT مودم' : 'تنظیم اینترنت از مودم', 'success', () => {
                     const modem = window.prompt('IP گیت‌وی مودم را وارد کنید. پنل مسیر پیش‌فرض و NAT اختصاصی این subnet را تنظیم می‌کند.', '192.168.70.1')?.trim();
                     if (!modem) return;
                     if (!isIpv4(modem)) {

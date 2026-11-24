@@ -2968,11 +2968,9 @@
         let state;
         try {
             state = await readChrDhcp();
-            if (action) {
-                await action(state);
-                state = await readChrDhcp();
-            }
-            status.textContent = 'وضعیت CHR دریافت شد.';
+            const message = action ? await action(state) : '';
+            if (action) state = await readChrDhcp();
+            status.textContent = message || 'وضعیت CHR دریافت شد.';
         } catch (error) {
             if (action) state = await readChrDhcp().catch(() => null);
             status.textContent = error.message;
@@ -3259,6 +3257,28 @@
         }
     }
 
+    async function clearOldChrDhcpLeases(serverName, ranges) {
+        const pool = chrPoolRanges({ ranges }).map(([first, last]) => [chrIpNumber(first), chrIpNumber(last)]);
+        const leases = await apiList('/ip/dhcp-server/lease?.proplist=.id,address,active-address,server,active-server,dynamic');
+        const oldLeases = leases.filter(row => {
+            if (!row['.id'] || (row['active-server'] || row.server) !== serverName || !isTrue(row.dynamic)) return false;
+            const active = ipOnly(row['active-address']);
+            const address = isIpv4(active) && active !== '0.0.0.0' ? active : ipOnly(row.address);
+            return isIpv4(address) && address !== '0.0.0.0'
+                && !pool.some(([first, last]) => chrIpNumber(address) >= first && chrIpNumber(address) <= last);
+        });
+        let removed = 0;
+        for (const lease of oldLeases) {
+            try {
+                await deleteById('/ip/dhcp-server/lease', lease['.id']);
+                removed += 1;
+            } catch (error) {
+                if (!monitoring) break;
+            }
+        }
+        return { removed, failed: oldLeases.length - removed };
+    }
+
     async function prepareChrDhcp(form, state, target) {
         if (!chrDhcpInterface.value) throw new Error('یک رابط LAN انتخاب کنید.');
         const [iface, currentAddress] = JSON.parse(chrDhcpInterface.value);
@@ -3315,9 +3335,17 @@
             if (pool && pool.ranges !== ranges) await apiFetch('/ip/pool/' + assertId(pool['.id']), 'PATCH', { ranges });
             if (server['address-pool'] !== name) await apiFetch('/ip/dhcp-server/' + assertId(server['.id']), 'PATCH', { 'address-pool': name });
             editingChrDhcp = null;
-        } else {
-            await apiFetch('/ip/dhcp-server', 'PUT', { name, interface: iface, 'address-pool': name, disabled: 'yes' });
+            let cleanup;
+            try {
+                cleanup = await clearOldChrDhcpLeases(server.name, ranges);
+            } catch (error) {
+                return 'محدوده ذخیره شد، ولی خواندن اجاره‌های قبلی ناموفق بود: ' + error.message;
+            }
+            const summary = `محدوده ذخیره شد. اجاره‌های پویای قدیمی حذف‌شده: ${cleanup.removed}.`;
+            return cleanup.failed ? summary + ` حذف ${cleanup.failed} اجاره ناموفق بود.`
+                : summary + ' برای گرفتن IP جدید، اتصال دستگاه را دوباره برقرار کنید.';
         }
+        await apiFetch('/ip/dhcp-server', 'PUT', { name, interface: iface, 'address-pool': name, disabled: 'yes' });
     }
 
     chrDhcpRefresh.addEventListener('click', () => void runChrDhcpAction());
@@ -3423,7 +3451,7 @@
         const [iface] = JSON.parse(chrDhcpInterface.value);
         const target = chrDhcpTarget(chrDhcpState, iface);
         if (target && !isTrue(target.disabled)
-            && !window.confirm(`محدودهٔ سرور فعال «${target.name}» تغییر می‌کند. کلاینت‌ها ممکن است لازم باشد اجارهٔ DHCP را تمدید کنند. ادامه می‌دهید؟`)) return;
+            && !window.confirm(`محدودهٔ سرور فعال «${target.name}» به‌روزرسانی و Leaseهای پویای آن خارج از محدودهٔ جدید حذف می‌شوند. کلاینت‌ها ممکن است موقتاً قطع شوند. ادامه می‌دهید؟`)) return;
         void runChrDhcpAction(state => prepareChrDhcp(form, state, target));
     });
     function emptyClientCards() {

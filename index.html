@@ -2932,7 +2932,7 @@
 
     async function readChrDhcp() {
         if (!monitoring) throw new Error('ابتدا به CHR متصل شوید.');
-        const [addresses, servers, interfaces, members, pools, leases, arp, networks] = await Promise.all([
+        const [addresses, servers, interfaces, members, pools, leases, arp, networks, internet] = await Promise.all([
             apiList('/ip/address?.proplist=.id,address,interface,dynamic,disabled,invalid,comment'),
             apiList('/ip/dhcp-server?.proplist=.id,name,interface,disabled,invalid,address-pool,relay'),
             apiList('/interface?.proplist=name,type,disabled,slave'),
@@ -2940,7 +2940,8 @@
             apiList('/ip/pool?.proplist=.id,name,ranges,next-pool,comment'),
             apiList('/ip/dhcp-server/lease?.proplist=.id,address,active-address,server,active-server,dynamic'),
             apiList('/ip/arp?.proplist=address'),
-            apiList('/ip/dhcp-server/network?.proplist=.id,address,gateway,dns-server,comment')
+            apiList('/ip/dhcp-server/network?.proplist=.id,address,gateway,dns-server,comment'),
+            readChrInternetConfiguration().catch(() => null)
         ]);
         const lan = new Set(members.filter(row => row.list.toUpperCase() === 'LAN').map(row => row.interface));
         const wan = new Set(members.filter(row => row.list.toUpperCase() === 'WAN').map(row => row.interface));
@@ -2960,6 +2961,7 @@
                 ...leases.flatMap(row => [row.address, row['active-address']])].filter(isIpv4),
             interfaces: eligible,
             allAddresses: addresses,
+            internet,
             servers
         };
     }
@@ -3081,6 +3083,38 @@
         return 'Exitflow DHCP Internet: ' + subnet;
     }
 
+    async function readChrInternetConfiguration() {
+        const [routes, rules] = await Promise.all([
+            apiList('/ip/route?.proplist=dst-address,routing-table,active,disabled,gateway,immediate-gw'),
+            apiList('/ip/firewall/nat?.proplist=chain,action,disabled,out-interface,src-address,comment')
+        ]);
+        return { routes, rules };
+    }
+
+    function chrInternetPathStatus(network, state) {
+        if (!state.internet) return 'unknown';
+        const { rules, routes } = state.internet;
+        const matchingNat = rules.filter(row => row.comment === chrInternetNatTag(network.address)
+            && row.chain === 'srcnat' && row.action === 'masquerade' && !isTrue(row.disabled)
+            && row['src-address'] === network.address && row['out-interface']);
+        if (!matchingNat.length) return 'missing';
+        const defaults = routes.filter(row => row['dst-address'] === '0.0.0.0/0'
+            && row['routing-table'] === 'main' && isTrue(row.active) && !isTrue(row.disabled));
+        const routeOn = (row, iface) => {
+            const [gateway, outgoing] = String(row['immediate-gw'] || row.gateway || '').split('%');
+            if (outgoing) return outgoing === iface;
+            if (!isIpv4(gateway)) return gateway === iface;
+            const ip = chrIpNumber(gateway);
+            return state.allAddresses.some(address => {
+                const bounds = chrDhcpSubnetBounds(address.address);
+                return address.interface === iface && !isTrue(address.disabled) && !isTrue(address.invalid)
+                    && bounds && ip > bounds[0] && ip < bounds[1];
+            });
+        };
+        return matchingNat.some(nat => defaults.length && defaults.every(route => routeOn(route, nat['out-interface'])))
+            ? 'configured' : 'no-route';
+    }
+
     async function prepareChrInternet(network, modem, state) {
         const current = state.networks.find(row => row['.id'] === network['.id']
             && row.address === network.address && row.gateway === network.gateway);
@@ -3098,10 +3132,7 @@
         }).map(row => row.interface));
         if (uplinks.size !== 1) throw new Error('CHR باید روی یک رابط مشخص، IP فعال در subnet مودم داشته باشد.');
         const [uplink] = uplinks;
-        const [routes, rules] = await Promise.all([
-            apiList('/ip/route?.proplist=dst-address,routing-table,active,disabled,gateway,immediate-gw'),
-            apiList('/ip/firewall/nat?.proplist=chain,action,disabled,out-interface,src-address,comment')
-        ]);
+        const { routes, rules } = state.internet || await readChrInternetConfiguration();
         const defaults = routes.filter(row => row['dst-address'] === '0.0.0.0/0'
             && row['routing-table'] === 'main' && !isTrue(row.disabled));
         const viaModem = row => [row['immediate-gw'], row.gateway].some(value => String(value || '').split('%')[0] === modem);
@@ -3161,7 +3192,12 @@
             description.textContent = inUse ? 'وابسته به DHCP یا Lease موجود' : 'بلااستفاده';
             card.append(title, gateway, description);
             if (inUse && chrGatewayCandidates(network, state).includes(network.gateway)) {
-                card.append(relayButton('تنظیم اینترنت از مودم', 'success', () => {
+                const internet = chrInternetPathStatus(network, state);
+                if (internet === 'configured' || internet === 'unknown') {
+                    const status = document.createElement('span');
+                    status.textContent = internet === 'configured' ? 'مسیر و NAT مودم تنظیم شده' : 'خواندن وضعیت مسیر و NAT ناموفق بود';
+                    card.append(status);
+                } else card.append(relayButton(internet === 'no-route' ? 'بررسی و تنظیم مسیر مودم' : 'تنظیم اینترنت از مودم', 'success', () => {
                     const modem = window.prompt('IP گیت‌وی مودم را وارد کنید. پنل مسیر پیش‌فرض و NAT اختصاصی این subnet را تنظیم می‌کند.', '192.168.70.1')?.trim();
                     if (!modem) return;
                     if (!isIpv4(modem)) {

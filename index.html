@@ -2927,14 +2927,14 @@
     async function readChrDhcp() {
         if (!monitoring) throw new Error('ابتدا به CHR متصل شوید.');
         const [addresses, servers, interfaces, members, pools, leases, arp, networks] = await Promise.all([
-            apiList('/ip/address?.proplist=address,interface,dynamic,disabled,invalid'),
+            apiList('/ip/address?.proplist=.id,address,interface,dynamic,disabled,invalid,comment'),
             apiList('/ip/dhcp-server?.proplist=.id,name,interface,disabled,invalid,address-pool'),
             apiList('/interface?.proplist=name,type,disabled,slave'),
             apiList('/interface/list/member?.proplist=list,interface'),
-            apiList('/ip/pool?.proplist=.id,name,ranges,next-pool'),
-            apiList('/ip/dhcp-server/lease?.proplist=address,active-address,server,active-server,dynamic'),
+            apiList('/ip/pool?.proplist=.id,name,ranges,next-pool,comment'),
+            apiList('/ip/dhcp-server/lease?.proplist=.id,address,active-address,server,active-server,dynamic'),
             apiList('/ip/arp?.proplist=address'),
-            apiList('/ip/dhcp-server/network?.proplist=address,gateway,dns-server')
+            apiList('/ip/dhcp-server/network?.proplist=.id,address,gateway,dns-server,comment')
         ]);
         const lan = new Set(members.filter(row => row.list.toUpperCase() === 'LAN').map(row => row.interface));
         const wan = new Set(members.filter(row => row.list.toUpperCase() === 'WAN').map(row => row.interface));
@@ -3046,8 +3046,9 @@
             document.getElementById('chrDhcpStatus').textContent = 'برای فعال‌سازی، دسترسی با IP ثابت و خاموش بودن DHCP مودم را تأیید کنید.';
             return;
         }
-        if (action === 'delete' && !window.confirm(`سرور DHCP «${server.name}» روی ${server.interface} حذف شود؟`)) return;
-        return runChrDhcpAction(async ({ servers }) => {
+        if (action === 'delete' && !window.confirm(`سرور DHCP «${server.name}» روی ${server.interface} و منابع اختصاصی آن حذف شوند؟ دستگاه‌های این شبکه ممکن است اتصالشان را از دست بدهند.`)) return;
+        return runChrDhcpAction(async state => {
+            const { servers } = state;
             const current = servers.find(row => row['.id'] === server['.id']
                 && row.name === server.name && row.interface === server.interface);
             if (!current) throw new Error('سرور تغییر کرده یا دیگر روی CHR موجود نیست.');
@@ -3056,10 +3057,81 @@
                 && row.interface === current.interface && !isTrue(row.disabled))) {
                 throw new Error('DHCP دیگری روی همین رابط فعال است.');
             }
-            if (action === 'delete') await deleteById(path, current['.id']);
-            else await apiFetch(path + '/' + assertId(current['.id']), 'PATCH', { disabled: action === 'enable' ? 'no' : 'yes' });
+            if (action === 'delete') {
+                const message = await removeChrDhcpServer(current, state);
+                if (editingChrDhcp?.['.id'] === current['.id']) editingChrDhcp = null;
+                chrDhcpReady.checked = false;
+                return message;
+            }
+            await apiFetch(path + '/' + assertId(current['.id']), 'PATCH', { disabled: action === 'enable' ? 'no' : 'yes' });
             chrDhcpReady.checked = false;
         });
+    }
+
+    function chrDhcpResourceTag(name) {
+        return 'Exitflow DHCP: ' + name;
+    }
+
+    async function removeChrDhcpServer(server, state) {
+        const tag = chrDhcpResourceTag(server.name);
+        const otherServers = state.servers.filter(row => row !== server);
+        const serverPool = state.pools.find(row => row.name === server['address-pool']);
+        const legacyName = server.name === 'exitflow-lan' || server.name === chrDhcpServerName(server.interface);
+        const ownedPools = state.pools.filter(pool => pool.comment === tag
+            || (pool === serverPool && legacyName && pool.name === server.name));
+        const poolsToRemove = ownedPools.filter(pool => !otherServers.some(row => row['address-pool'] === pool.name)
+            && !state.pools.some(row => row['next-pool'] === pool.name));
+        const remainingPools = state.pools.filter(pool => !poolsToRemove.includes(pool));
+        const usedRanges = remainingPools.flatMap(chrPoolRanges);
+        const remainingLeases = state.leases.filter(lease => (lease['active-server'] || lease.server) !== server.name
+            || !isTrue(lease.dynamic));
+        const managementIp = new URL(getBaseUrl()).hostname;
+        const subnetInUse = (first, last) => usedRanges.some(([start, end]) => chrIpNumber(start) <= last && chrIpNumber(end) >= first)
+            || remainingLeases.some(lease => [lease.address, lease['active-address']].some(ip =>
+                isIpv4(ip) && chrIpNumber(ip) >= first && chrIpNumber(ip) <= last));
+        const managedNetworks = state.networks.filter(row => row.comment === tag);
+        const networks = managedNetworks.filter(row => {
+            const bounds = chrDhcpSubnetBounds(row.address);
+            return bounds && !subnetInUse(...bounds)
+                && !otherServers.some(item => item.interface === server.interface);
+        });
+        const addresses = state.allAddresses.filter(row => {
+            if (row.interface !== server.interface || isTrue(row.dynamic) || ipOnly(row.address) === managementIp) return false;
+            const bounds = chrDhcpSubnetBounds(row.address);
+            if (!bounds || subnetInUse(...bounds) || otherServers.some(item => item.interface === row.interface)) return false;
+            if (row.comment === tag) return true;
+            return row.comment === 'Exitflow DHCP LAN' && poolsToRemove.includes(serverPool)
+                && chrPoolRanges(serverPool).some(([first, last]) => chrIpNumber(first) >= bounds[0] && chrIpNumber(last) <= bounds[1]);
+        });
+        const leases = state.leases.filter(lease => lease['.id'] && isTrue(lease.dynamic)
+            && (lease['active-server'] || lease.server) === server.name);
+        await deleteById('/ip/dhcp-server', server['.id']);
+        const failed = [];
+        for (const [path, rows, label] of [
+            ['/ip/dhcp-server/lease', leases, 'Lease'],
+            ['/ip/pool', poolsToRemove, 'IP Pool'],
+            ['/ip/dhcp-server/network', networks, 'DHCP Network'],
+            ['/ip/address', addresses, 'IP رابط']
+        ]) {
+            for (const row of rows) {
+                try {
+                    await deleteById(path, row['.id']);
+                } catch (error) {
+                    failed.push(label + ' ' + (row.name || row.address || row['.id']));
+                }
+            }
+            if (failed.length && path === '/ip/pool') break;
+        }
+        return failed.length ? 'سرور حذف شد. پاک‌سازی کامل نشد: ' + failed.join('، ')
+            : 'سرور DHCP و منابع اختصاصی شناسایی‌شده حذف شدند.';
+    }
+
+    function chrDhcpSubnetBounds(cidr) {
+        const [host, prefix] = String(cidr || '').split('/');
+        if (!isIpv4(host) || !/^\d{1,2}$/.test(prefix) || Number(prefix) > 32) return null;
+        const size = 2 ** (32 - Number(prefix));
+        const first = Math.floor(chrIpNumber(host) / size) * size;
+        return [first, first + size - 1];
     }
 
     function editChrDhcpRange(server, pool) {
@@ -3302,14 +3374,11 @@
         const dns = [...new Set(values.getAll('dns').flatMap(pair => pair.split(',')))];
         if (!dns.length) throw new Error('حداقل یک سرویس DNS انتخاب کنید.');
         if (!dns.every(isIpv4)) throw new Error('آدرس‌های IPv4 DNS را بررسی کنید.');
-        const { toNumber, subnet, network, size } = chrSubnet(address, gateway);
+        const { subnet, network, size } = chrSubnet(address, gateway);
         if (needsAddress) {
             const overlapsAddress = state.allAddresses.some(row => {
-                const [host, prefix] = String(row.address || '').split('/');
-                if (!isIpv4(host) || !/^\d{1,2}$/.test(prefix) || Number(prefix) > 32) return false;
-                const otherSize = 2 ** (32 - Number(prefix));
-                const otherNetwork = Math.floor(toNumber(host) / otherSize) * otherSize;
-                return otherNetwork < network + size && network < otherNetwork + otherSize;
+                const bounds = chrDhcpSubnetBounds(row.address);
+                return bounds && bounds[0] < network + size && network <= bounds[1];
             });
             if (overlapsAddress) throw new Error('subnet جدید با یکی از آدرس‌های تعریف‌شده در CHR هم‌پوشانی دارد.');
         }
@@ -3328,9 +3397,10 @@
         }
         const pool = pools.find(row => row.name === name);
         if (pool && pool !== oldPool && pool.ranges !== ranges) throw new Error('محدودهٔ آماده‌شدهٔ قبلی متفاوت است.');
-        if (needsAddress) await apiFetch('/ip/address', 'PUT', { address, interface: iface, comment: 'Exitflow DHCP LAN' });
-        if (!pool) await apiFetch('/ip/pool', 'PUT', { name, ranges });
-        if (!existing) await apiFetch('/ip/dhcp-server/network', 'PUT', { address: subnet, gateway, 'dns-server': dns.join(',') });
+        const comment = chrDhcpResourceTag(server?.name || name);
+        if (needsAddress) await apiFetch('/ip/address', 'PUT', { address, interface: iface, comment });
+        if (!pool) await apiFetch('/ip/pool', 'PUT', { name, ranges, comment });
+        if (!existing) await apiFetch('/ip/dhcp-server/network', 'PUT', { address: subnet, gateway, 'dns-server': dns.join(','), comment });
         if (server) {
             if (pool && pool.ranges !== ranges) await apiFetch('/ip/pool/' + assertId(pool['.id']), 'PATCH', { ranges });
             if (server['address-pool'] !== name) await apiFetch('/ip/dhcp-server/' + assertId(server['.id']), 'PATCH', { 'address-pool': name });

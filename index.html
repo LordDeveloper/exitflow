@@ -776,6 +776,12 @@
                     <label>جست‌وجو
                         <input id="clientSearch" type="search" placeholder="نام، IP، MAC یا نام peer">
                     </label>
+                    <label>نوع دستگاه
+                        <select id="clientSourceFilter">
+                            <option value="dynamic">DHCP پویا (D)</option>
+                            <option value="">همهٔ دستگاه‌ها</option>
+                        </select>
+                    </label>
                     <label>مسیر اینترنت
                         <select id="clientRouteFilter">
                             <option value="">همه</option><option value="vpn">Mullvad</option><option value="direct">اینترنت عادی</option>
@@ -2505,12 +2511,15 @@
     function visibleClientRows() {
         const query = document.getElementById('clientSearch').value;
         const route = document.getElementById('clientRouteFilter').value;
+        const source = document.getElementById('clientSourceFilter').value;
         const showOffline = document.getElementById('showOffline').checked;
         return latestClientRows.filter(row => {
+            const dynamicLease = row.source === 'dhcp' && row.dynamic;
+            if (source === 'dynamic' && !dynamicLease) return false;
             const lists = listsForIp(row.ip);
             if (!showWiredEnabled() && row.source === 'arp' && !lists.length) return false;
             if (route && (lists.length ? 'vpn' : 'direct') !== route) return false;
-            if (!showOffline && row.offline && !(row.source === 'dhcp' && row.dynamic)) return false;
+            if (!showOffline && row.offline && !dynamicLease) return false;
             return matchesFilter([clientDisplayName(row), row.host, row.ip, row.mac, row.kind, ...lists].join(' '), query);
         });
     }
@@ -3531,22 +3540,40 @@
         }
     }
 
+    async function readClientDhcpLeases() {
+        const leases = await apiList('/ip/dhcp-server/lease?.proplist=.id,address,active-address,mac-address,active-mac-address,host-name,comment,dynamic,status');
+        const missingFlag = leases.some(row => row.dynamic == null && row['.id']);
+        const flagged = missingFlag ? asList(await apiFetch('/ip/dhcp-server/lease/print', 'POST', {
+            '.proplist': ['.id'],
+            '.query': ['dynamic=true']
+        }).catch(() => [])) : [];
+        const dynamicIds = new Set(flagged.map(row => row['.id']).filter(Boolean));
+        return leases.flatMap(row => {
+            const active = ipOnly(row['active-address']);
+            const configured = ipOnly(row.address);
+            const address = isIpv4(active) && active !== '0.0.0.0' ? active : configured;
+            if (!isIpv4(address) || address === '0.0.0.0') return [];
+            return [{ ...row, address, 'mac-address': row['active-mac-address'] || row['mac-address'],
+                dynamic: row.dynamic == null ? dynamicIds.has(row['.id']) : isTrue(row.dynamic) }];
+        });
+    }
+
     async function loadClientsSection(now = Date.now(), showLoading = false) {
         if (showLoading) setSectionLoading('#tabClients .card', true);
         try {
             const [leases, connections, arpRows, routerAddrs] = await Promise.all([
-                apiList('/ip/dhcp-server/lease?.proplist=.id,address,mac-address,host-name,comment,dynamic,status'),
+                readClientDhcpLeases(),
                 apiList('/ip/firewall/connection?.proplist=.id,src-address,dst-address,orig-bytes,repl-bytes'),
                 apiList('/ip/arp?.proplist=address,mac-address,interface,status,comment').catch(() => []),
                 apiList('/ip/address?.proplist=address,interface,disabled,comment').catch(() => [])
             ]);
 
-            dhcpLeases = leases.filter((lease) => lease.address && ipOnly(lease.address));
+            dhcpLeases = leases;
 
             const clientTotals = accumulateClients(connections);
             latestClientSpeeds = speedsFromDelta(clientTotals, now);
 
-            const routerIps = new Set(routerAddrs.map((row) => ipOnly(row.address)).filter(isIpv4));
+            const routerIps = new Set(routerAddrs.filter(row => !isTrue(row.disabled)).map(row => ipOnly(row.address)).filter(isIpv4));
             const sessionPorts = dashboardPorts();
             const sessionIps = new Set();
             connections.forEach((row) => {
@@ -3559,6 +3586,7 @@
             dhcpLeases.forEach((lease) => {
                 const ip = ipOnly(lease.address);
                 if (!isIpv4(ip) || routerIps.has(ip)) return;
+                if (lanClients.get(ip)?.dynamic && !lease.dynamic) return;
                 lanClients.set(ip, {
                     ip,
                     host: cleanHost(lease['host-name'] || lease.comment || ''),
@@ -3622,7 +3650,7 @@
                 const place = row.iface ? (' · ' + row.iface) : '';
                 const stateTag = row.offline ? ' · وضعیت نامشخص'
                     : !hasConnections && row.leaseBound ? ' · اجارهٔ DHCP فعال' : '';
-                if (row.here) row.kind = ' · همین دستگاه' + place + stateTag;
+                if (row.here) row.kind = ' · همین دستگاه' + (row.dynamic ? ' · پویا (D)' : '') + place + stateTag;
                 else if (row.dynamic) row.kind = ' · پویا (D)' + place + stateTag;
                 else if (row.source === 'arp') row.kind = ' · سیمی' + place + stateTag;
                 else row.kind = ' · استاتیک' + place + stateTag;
@@ -4559,7 +4587,7 @@
         if (latestClientRows.length || monitoring) renderClientCards();
     });
     document.getElementById('clientSearch').addEventListener('input', renderClientCards);
-    for (const id of ['clientRouteFilter', 'showOffline']) {
+    for (const id of ['clientRouteFilter', 'clientSourceFilter', 'showOffline']) {
         document.getElementById(id).addEventListener('change', renderClientCards);
     }
     document.getElementById('clientCards').addEventListener('dblclick', event => {

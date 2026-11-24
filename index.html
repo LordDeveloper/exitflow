@@ -611,6 +611,10 @@
         .relay-actions:empty { display: none; }
         .relay-actions .relay-icon { display: inline-grid; place-items: center; width: 34px; height: 34px; padding: 0; }
         .relay-icon svg { width: 17px; height: 17px; }
+        #relayBulkActions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-block: 8px; }
+        #relayBulkActions[hidden], .relay-select[hidden] { display: none; }
+        .relay-peer[data-selected="true"] { outline: 2px solid #60a5fa; outline-offset: -2px; }
+        .relay-select { display: inline-flex; align-items: center; gap: 6px; width: fit-content; cursor: pointer; }
         .relay-icon[aria-busy="true"] { cursor: wait; opacity: 1; }
         .relay-icon[aria-busy="true"] svg { display: none; }
         .relay-icon[aria-busy="true"]::after {
@@ -833,6 +837,18 @@
                     </select>
                     <button type="button" id="relayRouterSync">تازه‌سازی وضعیت روتر</button>
                     <button type="button" id="peerResetBtn" class="danger">ریست پیرها</button>
+                    <button type="button" id="relaySelectBtn" aria-pressed="false">انتخاب چندتایی</button>
+                </div>
+                <div id="relayBulkActions" hidden>
+                    <label for="relayBulkOperation">عملیات انتخاب‌شده‌ها</label>
+                    <select id="relayBulkOperation">
+                        <option value="">انتخاب عملیات</option>
+                        <option value="enable">فعال‌کردن انتخاب‌شده‌ها</option>
+                        <option value="disable">غیرفعال‌کردن انتخاب‌شده‌ها</option>
+                        <option value="delete">حذف انتخاب‌شده‌ها</option>
+                    </select>
+                    <button type="button" id="relayBulkApply">اجرا</button>
+                    <span id="relayBulkCount" role="status"></span>
                 </div>
                 <div class="relay-feedback">
                     <label class="switch" for="hideDisabledRelays">
@@ -1465,6 +1481,8 @@
         resetSpeedWindow();
         emptyClientCards();
         installedRelays = null;
+        relaySelectionMode = false;
+        selectedRelayNodes.clear();
         peerTrafficTests.clear();
         document.getElementById('wgTabCount').textContent = '0';
         renderRelayManagement();
@@ -2491,7 +2509,7 @@
             const lists = listsForIp(row.ip);
             if (!showWiredEnabled() && row.source === 'arp' && !lists.length) return false;
             if (route && (lists.length ? 'vpn' : 'direct') !== route) return false;
-            if (!showOffline && row.offline) return false;
+            if (!showOffline && row.offline && !(row.source === 'dhcp' && row.dynamic)) return false;
             return matchesFilter([clientDisplayName(row), row.host, row.ip, row.mac, row.kind, ...lists].join(' '), query);
         });
     }
@@ -3545,7 +3563,7 @@
                 const stateTag = row.offline ? ' · وضعیت نامشخص'
                     : !hasConnections && row.leaseBound ? ' · اجارهٔ DHCP فعال' : '';
                 if (row.here) row.kind = ' · همین دستگاه' + place + stateTag;
-                else if (row.dynamic) row.kind = ' · پویا' + place + stateTag;
+                else if (row.dynamic) row.kind = ' · پویا (D)' + place + stateTag;
                 else if (row.source === 'arp') row.kind = ' · سیمی' + place + stateTag;
                 else row.kind = ' · استاتیک' + place + stateTag;
             });
@@ -3853,7 +3871,7 @@
             await runRelayAction(async () => {
                 let result;
                 try {
-                    result = await resetMullvadPeers((finished, total) => {
+                    result = await manageMullvadPeers((finished, total) => {
                         peerResetStatus.textContent = `بررسی‌شده: ${finished} از ${total}`;
                     });
                 } catch (error) {
@@ -3933,8 +3951,8 @@
         throw new Error('پورت محلی آزاد برای WireGuard پیدا نشد');
     }
 
-    async function setPeerDisabledState(ifaceName, disable) {
-        const ifaces = await apiList('/interface/wireguard?.proplist=.id,name,listen-port');
+    async function setPeerDisabledState(ifaceName, disable, ifaces) {
+        ifaces ??= await apiList('/interface/wireguard?.proplist=.id,name,listen-port');
         const target = ifaces.find((item) => item.name === ifaceName);
         if (!target || !target['.id']) {
             throw new Error(`اینترفیس ${ifaceName} در روتر پیدا نشد`);
@@ -3947,6 +3965,7 @@
             }
         }
         await apiFetch(`/interface/wireguard/${assertId(target['.id'])}`, 'PATCH', changes);
+        Object.assign(target, changes);
     }
 
     async function restartPeerInterface(ifaceName) {
@@ -5020,6 +5039,63 @@
     let relayCatalog = [];
     let installedRelays = null;
     let relayBusy = false;
+    let relaySelectionMode = false;
+    const selectedRelayNodes = new Map();
+
+    function paintRelaySelection() {
+        const count = selectedRelayNodes.size;
+        document.getElementById('relaySelectBtn').setAttribute('aria-pressed', String(relaySelectionMode));
+        document.getElementById('relaySelectBtn').disabled = !monitoring || relayBusy;
+        document.getElementById('relayBulkActions').hidden = !relaySelectionMode;
+        document.getElementById('relayBulkCount').textContent = count + ' پیر انتخاب شده';
+        const operation = document.getElementById('relayBulkOperation');
+        operation.disabled = !count || relayBusy;
+        document.getElementById('relayBulkApply').disabled = !count || !operation.value || relayBusy;
+        for (const card of relayManagement.querySelectorAll('[data-relay-interface]')) {
+            const checkbox = card.querySelector('.relay-select input');
+            if (!checkbox) continue;
+            checkbox.parentElement.hidden = !relaySelectionMode;
+            checkbox.disabled = relayBusy;
+            checkbox.checked = selectedRelayNodes.has(card.dataset.relayInterface);
+            card.dataset.selected = String(checkbox.checked);
+        }
+    }
+
+    function toggleRelaySelection(iface) {
+        if (!monitoring || relayBusy || !iface['.id']) return;
+        relaySelectionMode = true;
+        if (selectedRelayNodes.has(iface.name)) selectedRelayNodes.delete(iface.name);
+        else selectedRelayNodes.set(iface.name, iface['.id']);
+        paintRelaySelection();
+    }
+
+    document.getElementById('relaySelectBtn').addEventListener('click', () => {
+        relaySelectionMode = !relaySelectionMode;
+        if (!relaySelectionMode) selectedRelayNodes.clear();
+        paintRelaySelection();
+    });
+    document.getElementById('relayBulkOperation').addEventListener('change', paintRelaySelection);
+    document.getElementById('relayBulkApply').addEventListener('click', () => {
+        if (!monitoring || relayBusy || !selectedRelayNodes.size) return;
+        const select = document.getElementById('relayBulkOperation');
+        const operation = select.value;
+        if (!['enable', 'disable', 'delete'].includes(operation)) return;
+        if (operation === 'delete' && !window.confirm(`${selectedRelayNodes.size} پیر انتخاب‌شده و تخصیص کلاینت‌های آن‌ها حذف شوند؟`)) return;
+        const selected = new Map(selectedRelayNodes);
+        void runRelayAction(async () => {
+            const result = await manageMullvadPeers((finished, total) => {
+                relayStatus.textContent = `پردازش‌شده: ${finished} از ${total}`;
+            }, operation, selected);
+            await loadInstalledRelays();
+            void refreshAll().catch(error => setPollStatus(error.message));
+            select.value = '';
+            if (!result.failed.length) {
+                selectedRelayNodes.clear();
+                relaySelectionMode = false;
+            }
+            return `انجام‌شده: ${result.removed}` + (result.failed.length ? ' · ناموفق: ' + result.failed.join('، ') : '');
+        });
+    });
     let relayCatalogBusy = false;
     let relayPage = 0;
     let relayPageSize = 30;
@@ -5116,6 +5192,10 @@
             }
         }
         installedRelays = next;
+        const currentIds = new Map([...next.values()].map(row => [row.name, row['.id']]));
+        for (const [name, id] of selectedRelayNodes) {
+            if (currentIds.get(name) !== id) selectedRelayNodes.delete(name);
+        }
         return changed;
     }
 
@@ -5376,6 +5456,7 @@
             rows.append(card);
         }
         document.getElementById('relayCatalogRows').replaceChildren(rows);
+        paintRelaySelection();
         updateRelayCardStats();
     }
 
@@ -5409,6 +5490,27 @@
         actions.className = 'relay-actions';
         if (iface) {
             card.dataset.relayInterface = iface.name;
+            if (iface.name.startsWith('mv-wg-') && iface['.id']) {
+                const selection = document.createElement('label');
+                selection.className = 'relay-select';
+                selection.hidden = true;
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.setAttribute('aria-label', 'انتخاب ' + iface.name);
+                checkbox.addEventListener('change', () => toggleRelaySelection(iface));
+                selection.append(checkbox, 'انتخاب');
+                card.prepend(selection);
+                const onCardBody = event => !event.target.closest('button, a, input, label, select, summary, .relay-edit');
+                card.addEventListener('dblclick', event => {
+                    if (onCardBody(event) && !relaySelectionMode) {
+                        event.preventDefault();
+                        toggleRelaySelection(iface);
+                    }
+                });
+                card.addEventListener('click', event => {
+                    if (relaySelectionMode && event.detail === 1 && onCardBody(event)) toggleRelaySelection(iface);
+                });
+            }
             const stats = document.createElement('div');
             stats.className = 'relay-metrics';
             stats.innerHTML = `
@@ -5678,9 +5780,11 @@
         await setPeerDisabledState(iface, false);
     }
 
-    async function resetMullvadPeers(onProgress) {
-        const interfaces = await apiList('/interface/wireguard?.proplist=.id,name');
-        const nodes = interfaces.filter(row => String(row.name || '').startsWith('mv-wg-'));
+    async function manageMullvadPeers(onProgress, operation = 'delete', selected = null) {
+        const interfaces = await apiList('/interface/wireguard?.proplist=.id,name,listen-port');
+        const nodes = interfaces.filter(row => String(row.name || '').startsWith('mv-wg-')
+            && (!selected || selected.get(row.name) === row['.id']));
+        if (selected && nodes.length !== selected.size) throw new Error('فهرست پیرهای انتخاب‌شده تغییر کرده است. دوباره انتخاب کنید.');
         const snapshots = new Map();
         const readOnce = path => {
             if (!snapshots.has(path)) snapshots.set(path, apiList(path));
@@ -5688,11 +5792,13 @@
         };
         const failed = [];
         let removed = 0;
-        const batchSize = 4;
+        const batchSize = operation === 'enable' ? 1 : 4;
         for (let start = 0; start < nodes.length; start += batchSize) {
             if (!monitoring) throw new Error('اتصال به روتر قطع شد. وضعیت پیرها را دوباره بررسی کنید.');
             const batch = nodes.slice(start, start + batchSize);
-            const results = await Promise.allSettled(batch.map(node => removeCatalogRelay(node, readOnce)));
+            const results = await Promise.allSettled(batch.map(node => operation === 'delete'
+                ? removeCatalogRelay(node, readOnce)
+                : setPeerDisabledState(node.name, operation === 'disable', interfaces)));
             results.forEach((result, index) => {
                 if (result.status === 'fulfilled') removed += 1;
                 else failed.push(batch[index].name + ': ' + result.reason.message);

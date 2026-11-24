@@ -137,11 +137,6 @@ def dispatch(path, method, payload):
     with closing(connect_database()) as connection, connection:
         if method == "POST":
             connection.execute("BEGIN IMMEDIATE")
-        if path == "/dashboard/reset" and method == "POST":
-            if payload.get("confirmation") != "CONFIRM":
-                raise ValueError("برای ریست پنل، عبارت CONFIRM را وارد کنید.")
-            connection.execute("DELETE FROM settings")
-            return {"reset": True}
         db = read_database(connection)
         settings = db.get("wireguard", {})
         if path == "/dashboard/client-names":

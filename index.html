@@ -86,9 +86,9 @@
         .account-menu { position: relative; }
         .account-menu summary { cursor: pointer; padding: 6px; }
         .account-actions { position: absolute; z-index: 30; inset-inline-end: 0; top: 100%; display: grid; gap: 6px; min-width: 110px; padding: 8px; background: #152033; border: 1px solid var(--border); border-radius: 8px; }
-        #panelResetDialog { width: min(420px, calc(100% - 32px)); background: #152033; color: inherit; border: 1px solid var(--border); border-radius: 12px; padding: 18px; }
-        #panelResetDialog::backdrop { background: #080d17b3; }
-        #panelResetForm { display: grid; gap: 10px; }
+        #peerResetDialog { width: min(420px, calc(100% - 32px)); background: #152033; color: inherit; border: 1px solid var(--border); border-radius: 12px; padding: 18px; }
+        #peerResetDialog::backdrop { background: #080d17b3; }
+        #peerResetForm { display: grid; gap: 10px; }
         .status-strip {
             background: var(--card);
             border: 1px solid var(--border);
@@ -706,7 +706,6 @@
                 <details id="accountMenu" class="account-menu">
                     <summary><strong id="loggedUserLabel">admin</strong></summary>
                     <div class="account-actions">
-                        <button type="button" id="panelResetBtn" class="danger compact">ریست</button>
                         <button type="button" id="logoutBtn" class="compact">خروج</button>
                     </div>
                 </details>
@@ -833,6 +832,7 @@
                         <option value="available">نصب‌نشده</option>
                     </select>
                     <button type="button" id="relayRouterSync">تازه‌سازی وضعیت روتر</button>
+                    <button type="button" id="peerResetBtn" class="danger">ریست پیرها</button>
                 </div>
                 <div class="relay-feedback">
                     <label class="switch" for="hideDisabledRelays">
@@ -1130,17 +1130,17 @@
     </div>
 </div>
 
-<dialog id="panelResetDialog" aria-labelledby="panelResetTitle">
-    <form id="panelResetForm">
-        <h2 id="panelResetTitle">ریست پنل</h2>
-        <p>اطلاعات ورود و تنظیمات محلی پنل پاک می‌شوند. تنظیمات روی CHR باقی می‌مانند.</p>
-        <label for="panelResetInput">برای تأیید، <bdi>CONFIRM</bdi> بنویسید.</label>
-        <input id="panelResetInput" dir="ltr" autocomplete="off" autofocus>
+<dialog id="peerResetDialog" aria-labelledby="peerResetTitle">
+    <form id="peerResetForm">
+        <h2 id="peerResetTitle">ریست پیرها</h2>
+        <p>تمام پیرهای Mullvad و تخصیص کلاینت‌های آن‌ها از روتر حذف می‌شوند. این کار می‌تواند اتصال کلاینت‌های متصل به Mullvad را قطع کند.</p>
+        <label for="peerResetInput">برای تأیید، <bdi>CONFIRM</bdi> بنویسید.</label>
+        <input id="peerResetInput" dir="ltr" autocomplete="off" autofocus>
         <div>
-            <button type="submit" id="panelResetApply" class="danger" disabled>ریست پنل</button>
-            <button type="button" id="panelResetCancel">انصراف</button>
+            <button type="submit" id="peerResetApply" class="danger" disabled>ریست پیرها</button>
+            <button type="button" id="peerResetCancel">انصراف</button>
         </div>
-        <p id="panelResetStatus" role="status"></p>
+        <p id="peerResetStatus" role="status"></p>
     </form>
 </dialog>
 
@@ -3807,11 +3807,11 @@
 
     document.getElementById('connectBtn').addEventListener('click', connectAndStart);
     const accountMenu = document.getElementById('accountMenu');
-    const panelResetDialog = document.getElementById('panelResetDialog');
-    const panelResetInput = document.getElementById('panelResetInput');
-    const panelResetApply = document.getElementById('panelResetApply');
-    const panelResetCancel = document.getElementById('panelResetCancel');
-    const panelResetStatus = document.getElementById('panelResetStatus');
+    const peerResetDialog = document.getElementById('peerResetDialog');
+    const peerResetInput = document.getElementById('peerResetInput');
+    const peerResetApply = document.getElementById('peerResetApply');
+    const peerResetCancel = document.getElementById('peerResetCancel');
+    const peerResetStatus = document.getElementById('peerResetStatus');
 
     document.addEventListener('click', event => {
         if (accountMenu.open && !accountMenu.contains(event.target)) accountMenu.open = false;
@@ -3825,35 +3825,51 @@
         accountMenu.open = false;
         forceLogout('از حساب خارج شدید.', false);
     });
-    document.getElementById('panelResetBtn').addEventListener('click', () => {
-        accountMenu.open = false;
-        panelResetInput.value = '';
-        panelResetApply.disabled = true;
-        panelResetStatus.textContent = '';
-        panelResetDialog.showModal();
+    const peerResetBtn = document.getElementById('peerResetBtn');
+    peerResetBtn.addEventListener('click', () => {
+        if (!monitoring || relayBusy) {
+            relayStatus.textContent = monitoring ? 'ابتدا منتظر پایان عملیات جاری بمانید.' : 'ابتدا به روتر متصل شوید.';
+            return;
+        }
+        peerResetInput.value = '';
+        peerResetApply.disabled = true;
+        peerResetStatus.textContent = '';
+        peerResetDialog.showModal();
     });
-    panelResetInput.addEventListener('input', () => {
-        panelResetApply.disabled = panelResetInput.value !== 'CONFIRM';
+    peerResetInput.addEventListener('input', () => {
+        peerResetApply.disabled = peerResetInput.value !== 'CONFIRM';
     });
-    panelResetCancel.addEventListener('click', () => panelResetDialog.close());
-    panelResetDialog.addEventListener('cancel', event => {
-        if (panelResetInput.disabled) event.preventDefault();
+    peerResetCancel.addEventListener('click', () => peerResetDialog.close());
+    peerResetDialog.addEventListener('cancel', event => {
+        if (peerResetInput.disabled) event.preventDefault();
     });
-    panelResetDialog.addEventListener('close', () => accountMenu.querySelector('summary').focus());
-    document.getElementById('panelResetForm').addEventListener('submit', async event => {
+    peerResetDialog.addEventListener('close', () => peerResetBtn.focus());
+    document.getElementById('peerResetForm').addEventListener('submit', async event => {
         event.preventDefault();
-        if (panelResetInput.disabled || panelResetInput.value !== 'CONFIRM') return;
-        panelResetInput.disabled = panelResetApply.disabled = panelResetCancel.disabled = true;
-        panelResetStatus.textContent = 'در حال ریست پنل…';
+        if (peerResetInput.disabled || peerResetInput.value !== 'CONFIRM' || relayBusy || !monitoring) return;
+        peerResetInput.disabled = peerResetApply.disabled = peerResetCancel.disabled = true;
+        peerResetStatus.textContent = 'در حال حذف پیرهای Mullvad…';
         try {
-            await localDashboard('reset', { confirmation: panelResetInput.value });
-            for (const key of [LS_IP, LS_USER, LS_PASS, LS_LOGGED_IN, LS_WIRED]) {
-                try { localStorage.removeItem(key); } catch (error) { /* private mode */ }
-            }
-            window.location.reload();
-        } catch (error) {
-            panelResetStatus.textContent = error.message;
-            panelResetInput.disabled = panelResetApply.disabled = panelResetCancel.disabled = false;
+            await runRelayAction(async () => {
+                let result;
+                try {
+                    result = await resetMullvadPeers();
+                } catch (error) {
+                    peerResetStatus.textContent = error.message;
+                    throw error;
+                }
+                await loadInstalledRelays().catch(error => setPollStatus(error.message));
+                void refreshAll().catch(error => setPollStatus(error.message));
+                if (result.failed.length) {
+                    peerResetStatus.textContent = `حذف‌شده: ${result.removed} · حذف ناموفق: ${result.failed.join('، ')}`;
+                    return 'حذف همهٔ پیرها کامل نشد.';
+                }
+                peerResetDialog.close();
+                return result.removed ? `${result.removed} نود Mullvad حذف شد.` : 'پیر Mullvad روی روتر پیدا نشد.';
+            });
+        } finally {
+            peerResetInput.disabled = peerResetCancel.disabled = false;
+            peerResetApply.disabled = peerResetInput.value !== 'CONFIRM';
         }
     });
     document.getElementById('liveToggleBtn').addEventListener('click', toggleLive);
@@ -5658,6 +5674,23 @@
         }
         await ensurePeerDataPath(iface);
         await setPeerDisabledState(iface, false);
+    }
+
+    async function resetMullvadPeers() {
+        const interfaces = await apiList('/interface/wireguard?.proplist=.id,name');
+        const nodes = interfaces.filter(row => String(row.name || '').startsWith('mv-wg-'));
+        const failed = [];
+        let removed = 0;
+        for (const node of nodes) {
+            if (!monitoring) throw new Error('اتصال به روتر قطع شد. وضعیت پیرها را دوباره بررسی کنید.');
+            try {
+                await removeCatalogRelay(node);
+                removed += 1;
+            } catch (error) {
+                failed.push(node.name + ': ' + error.message);
+            }
+        }
+        return { removed, failed };
     }
 
     async function removeCatalogRelay(iface) {

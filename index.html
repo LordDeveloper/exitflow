@@ -556,6 +556,10 @@
         .chr-dhcp-card dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 12px; margin: 0; }
         .chr-dhcp-card dd { margin: 0; overflow-wrap: anywhere; }
         .chr-dhcp-networks { margin-block-start: 14px; }
+        #chrReportForm { grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); }
+        #chrReportRun { justify-self: start; }
+        #chrReportOutput { width: 100%; min-height: 180px; resize: vertical; font-family: monospace; }
+        #chrReportOutput[hidden] { display: none; }
         .chr-dhcp-networks summary { cursor: pointer; margin-block-end: 8px; }
         @media (max-width: 520px) { #chrDhcpForm { grid-template-columns: minmax(0, 1fr); } }
         .relay-settings label { display: grid; gap: 6px; font-size: 13px; }
@@ -966,6 +970,18 @@
                 <button type="button" id="chrInternetCheck">بررسی مسیر اینترنت و NAT</button>
                 <p id="chrInternetResult" role="status"></p>
                 <div id="chrDhcpNetworks" class="chr-dhcp-cards"></div>
+            </details>
+            <details class="chr-dhcp-networks">
+                <summary>گزارش عیب‌یابی اتصال کلاینت</summary>
+                <form id="chrReportForm" class="relay-settings">
+                    <label>IP کلاینت<input name="client" placeholder="192.168.26.47" required dir="ltr"></label>
+                    <label>IP مودم<input name="modem" value="192.168.70.1" required dir="ltr"></label>
+                    <button type="submit" id="chrReportRun">گرفتن گزارش</button>
+                </form>
+                <p class="muted">در حین گرفتن گزارش، روی همان کلاینت تلاش کنید یک سایت باز کنید.</p>
+                <p id="chrReportStatus" role="status"></p>
+                <textarea id="chrReportOutput" aria-label="متن گزارش عیب‌یابی" dir="ltr" readonly hidden></textarea>
+                <button type="button" id="chrReportCopy" hidden>کپی گزارش</button>
             </details>
         </section>
     </div>
@@ -3079,6 +3095,69 @@
         }
     }
 
+    async function collectChrClientReport(client, modem) {
+        const resources = [
+            ['forwarding', '/ip/settings', 'ip-forward,send-redirects,rp-filter,ipv4-fasttrack-active'],
+            ['interfaces', '/interface', 'name,type,running,disabled'],
+            ['interfaceLists', '/interface/list/member', 'list,interface,disabled'],
+            ['dhcpClients', '/ip/dhcp-client', 'interface,address,gateway,status,disabled,add-default-route'],
+            ['addresses', '/ip/address', 'address,interface,disabled,dynamic,invalid'],
+            ['dhcpServers', '/ip/dhcp-server', 'name,interface,address-pool,disabled,invalid'],
+            ['dhcpNetworks', '/ip/dhcp-server/network', 'address,gateway,dns-server'],
+            ['pools', '/ip/pool', 'name,ranges,next-pool'],
+            ['leases', '/ip/dhcp-server/lease', 'address,active-address,server,active-server,disabled,dynamic,status'],
+            ['arp', '/ip/arp', 'address,interface,status,complete'],
+            ['defaultRoutes', '/ip/route', 'dst-address,routing-table,gateway,immediate-gw,active,disabled,distance'],
+            ['routingRules', '/routing/rule', 'src-address,dst-address,routing-mark,action,table,disabled'],
+            ['mangle', '/ip/firewall/mangle', 'chain,action,disabled,src-address,src-address-list,dst-address,dst-address-list,new-routing-mark,passthrough,packets,bytes'],
+            ['forwardFilter', '/ip/firewall/filter', 'chain,action,disabled,in-interface,out-interface,in-interface-list,out-interface-list,src-address,src-address-list,dst-address,connection-state,packets,bytes'],
+            ['srcnat', '/ip/firewall/nat', 'chain,action,disabled,in-interface,out-interface,out-interface-list,src-address,src-address-list,dst-address,to-addresses,packets,bytes'],
+            ['assignments', '/ip/firewall/address-list', 'list,address,disabled'],
+            ['connections', '/ip/firewall/connection', 'src-address,dst-address,protocol,orig-bytes,repl-bytes,seen-reply']
+        ];
+        const failed = [];
+        const config = Object.fromEntries(await Promise.all(resources.map(async ([name, path, fields]) => {
+            try {
+                const keys = fields.split(',');
+                const rows = await apiList(path + '?.proplist=' + fields);
+                return [name, rows.map(row => Object.fromEntries(keys.filter(key => row[key] != null).map(key => [key, row[key]])))];
+            } catch {
+                failed.push(name);
+                return [name, []];
+            }
+        })));
+        const includes = (cidr, ip) => {
+            const bounds = chrDhcpSubnetBounds(cidr.includes('/') ? cidr : cidr + '/32');
+            return bounds && chrIpNumber(ip) >= bounds[0] && chrIpNumber(ip) <= bounds[1];
+        };
+        config.leases = config.leases.filter(row => row.address === client || row['active-address'] === client);
+        config.arp = config.arp.filter(row => [client, modem].includes(row.address));
+        config.dhcpNetworks = config.dhcpNetworks.filter(row => row.address && includes(row.address, client));
+        config.defaultRoutes = config.defaultRoutes.filter(row => row['dst-address'] === '0.0.0.0/0');
+        config.assignments = config.assignments.filter(row => row.address && String(row.list).startsWith('mv-wg-') && includes(row.address, client));
+        config.forwardFilter = config.forwardFilter.filter(row => row.chain === 'forward');
+        config.srcnat = config.srcnat.filter(row => row.chain === 'srcnat');
+        config.interfaces = config.interfaces.filter(row => !String(row.name).startsWith('mv-wg-')
+            || config.assignments.some(assignment => assignment.list === row.name));
+        config.addresses = config.addresses.filter(row => config.interfaces.some(iface => iface.name === row.interface));
+        const connections = config.connections.filter(row => [row['src-address'], row['dst-address']].some(value => ipOnly(value) === client));
+        config.connections = {
+            count: connections.length,
+            withReplies: connections.filter(row => isTrue(row['seen-reply']) || Number(row['repl-bytes']) > 0).length
+        };
+
+        const probes = {};
+        for (const [name, address] of [['client', client], ['modem', modem], ['internet', '1.1.1.1']]) {
+            try {
+                const reply = await apiFetch('/ping', 'POST', { address, count: '3' }, 8000);
+                probes[name] = { address, ...summarizePing(reply) };
+            } catch {
+                probes[name] = { address, error: 'Ping unavailable or timed out' };
+            }
+        }
+        return { format: 'Exitflow CHR client diagnostics v1', time: new Date().toISOString(), client, modem, failed, config, probes };
+    }
+
     function chrInternetNatTag(subnet) {
         return 'Exitflow DHCP Internet: ' + subnet;
     }
@@ -3729,6 +3808,46 @@
         }
         await apiFetch('/ip/dhcp-server', 'PUT', { name, interface: iface, 'address-pool': name, disabled: 'yes' });
     }
+
+    const chrReportRun = document.getElementById('chrReportRun');
+    const chrReportOutput = document.getElementById('chrReportOutput');
+    const chrReportCopy = document.getElementById('chrReportCopy');
+    const chrReportStatus = document.getElementById('chrReportStatus');
+
+    document.getElementById('chrReportForm').addEventListener('submit', async event => {
+        event.preventDefault();
+        if (chrReportRun.disabled) return;
+        const values = new FormData(event.currentTarget);
+        const client = values.get('client').trim();
+        const modem = values.get('modem').trim();
+        if (!monitoring || !isIpv4(client) || !isIpv4(modem)) {
+            chrReportStatus.textContent = !monitoring ? 'ابتدا به CHR متصل شوید.' : 'IP کلاینت و مودم باید IPv4 معتبر باشند.';
+            return;
+        }
+        chrReportRun.disabled = true;
+        chrReportOutput.hidden = chrReportCopy.hidden = true;
+        chrReportStatus.textContent = 'در حال خواندن وضعیت CHR و اجرای تست‌ها…';
+        try {
+            const report = await collectChrClientReport(client, modem);
+            chrReportOutput.value = JSON.stringify(report, null, 2);
+            chrReportOutput.hidden = chrReportCopy.hidden = false;
+            chrReportStatus.textContent = report.failed.length ? 'گزارش آماده است. خواندن بعضی بخش‌ها ناموفق بود.' : 'گزارش آمادهٔ کپی است.';
+        } catch {
+            chrReportStatus.textContent = 'ساخت گزارش ناموفق بود. پس از بررسی اتصال به CHR دوباره تلاش کنید.';
+        } finally {
+            chrReportRun.disabled = false;
+        }
+    });
+    chrReportCopy.addEventListener('click', async () => {
+        try {
+            await navigator.clipboard.writeText(chrReportOutput.value);
+            chrReportStatus.textContent = 'گزارش کپی شد.';
+        } catch {
+            chrReportOutput.focus();
+            chrReportOutput.select();
+            chrReportStatus.textContent = 'برای کپی Ctrl+C بزنید.';
+        }
+    });
 
     document.getElementById('chrInternetCheck').addEventListener('click', event => {
         const output = document.getElementById('chrInternetResult');

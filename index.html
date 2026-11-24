@@ -545,7 +545,7 @@
         .chr-dns-options button { text-align: start; background: var(--panel); border: 1px solid var(--border); }
         .chr-dns-options button[aria-pressed="true"] { border-color: #60a5fa; background: #1d3558; }
         .chr-dns-options button[aria-pressed="true"]::after { content: '✓'; float: inline-end; }
-        #chrDnsSelect[hidden] { display: none; }
+        #chrDnsSelect[hidden], #chrDhcpNewSubnetField[hidden] { display: none; }
         .chr-dhcp-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 265px), 1fr)); gap: 12px; }
         .chr-dhcp-card { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--border); border-radius: 10px; }
         .chr-dhcp-card header { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
@@ -926,6 +926,9 @@
             <label><input type="checkbox" id="chrDhcpModem"> نمایش رابط‌های متصل به مودم (خارج از لیست LAN)</label>
             <form id="chrDhcpForm" class="relay-settings">
                 <label>رابط LAN<select id="chrDhcpInterface" required></select></label>
+                <label id="chrDhcpNewSubnetField" hidden>IPv4 رابط جدید (CIDR)
+                    <input id="chrDhcpNewSubnet" placeholder="192.168.24.2/24" dir="ltr" disabled>
+                </label>
                 <label>Gateway<input name="gateway" list="chrDhcpGateways" required dir="ltr"><datalist id="chrDhcpGateways"></datalist></label>
                 <label>ابتدای محدودهٔ IP<input name="first" required disabled dir="ltr"></label>
                 <label>انتهای محدودهٔ IP<input name="last" required disabled dir="ltr"></label>
@@ -2909,6 +2912,7 @@
     const chrGateway = chrDhcpForm.elements.gateway;
     const chrDhcpModem = document.getElementById('chrDhcpModem');
     const chrDhcpInterface = document.getElementById('chrDhcpInterface');
+    const chrDhcpNewSubnet = document.getElementById('chrDhcpNewSubnet');
     const chrDhcpReady = document.getElementById('chrDhcpReady');
     const chrDhcpPrepare = document.getElementById('chrDhcpPrepare');
     const chrDhcpRefresh = document.getElementById('chrDhcpRefresh');
@@ -2945,7 +2949,8 @@
             routerIps: addresses.map(row => ipOnly(row.address)).filter(isIpv4),
             occupied: [...addresses.map(row => ipOnly(row.address)), ...arp.map(row => row.address),
                 ...leases.flatMap(row => [row.address, row['active-address']])].filter(isIpv4),
-            needsStaticIp: eligible.filter(row => !staticAddresses.some(address => address.interface === row.name)),
+            interfaces: eligible,
+            allAddresses: addresses,
             servers
         };
     }
@@ -2978,14 +2983,13 @@
                 option.textContent = row.interface + ' · ' + row.address;
                 chrDhcpInterface.append(option);
             }
-            if (selected && [...chrDhcpInterface.options].some(option => option.value === selected)) chrDhcpInterface.value = selected;
-            for (const row of state?.needsStaticIp || []) {
+            for (const row of state?.interfaces || []) {
                 const option = document.createElement('option');
-                option.value = '';
-                option.disabled = true;
-                option.textContent = row.name + ' · نیاز به IPv4 ثابت';
+                option.value = JSON.stringify([row.name, '']);
+                option.textContent = row.name + ' · ساخت subnet جدید';
                 chrDhcpInterface.append(option);
             }
+            if (selected && [...chrDhcpInterface.options].some(option => option.value === selected)) chrDhcpInterface.value = selected;
             for (const server of state?.servers || []) list.append(buildChrDhcpCard(server, state.pools));
             if (state && !state.servers.length) list.textContent = 'سرور DHCP روی CHR ثبت نشده است.';
             chrDhcpState = state;
@@ -3069,7 +3073,7 @@
         const current = options.find(option => {
             if (!isIpv4(first)) return false;
             const address = JSON.parse(option.value)[1];
-            try { return chrSubnet(address, ipOnly(address)).usable(first); } catch { return false; }
+            try { return address && chrSubnet(address, ipOnly(address)).usable(first); } catch { return false; }
         });
         chrDhcpInterface.value = (current || options[0]).value;
         updateChrDhcpForm();
@@ -3083,13 +3087,33 @@
     }
 
     function updateChrDhcpForm() {
-        const iface = chrDhcpInterface.value ? JSON.parse(chrDhcpInterface.value)[0] : '';
+        const [iface, address] = chrDhcpInterface.value ? JSON.parse(chrDhcpInterface.value) : [];
+        const createSubnet = Boolean(iface && !address);
+        document.getElementById('chrDhcpNewSubnetField').hidden = !createSubnet;
+        chrDhcpNewSubnet.disabled = !createSubnet;
+        chrDhcpNewSubnet.required = createSubnet;
+        const newAddress = createSubnet ? chrNewSubnetAddress() : '';
+        chrDhcpNewSubnet.setCustomValidity(createSubnet && chrDhcpNewSubnet.value && !newAddress
+            ? 'IPv4 رابط و پیشوند را وارد کنید، مثلاً 192.168.24.2/24.' : '');
         chrDhcpEditCancel.hidden = !editingChrDhcp;
         chrDhcpPrepare.textContent = editingChrDhcp ? 'ذخیرهٔ محدوده' : 'ساخت DHCP غیرفعال';
         chrDhcpSuggest.disabled = chrDhcpPrepare.disabled = !chrDhcpState || !iface
-            || chrDhcpRefresh.disabled || (editingChrDhcp
+            || chrDhcpRefresh.disabled || (createSubnet && !newAddress) || (editingChrDhcp
                 ? iface !== editingChrDhcp.interface
                 : chrDhcpState.servers.some(row => row.interface === iface));
+    }
+
+    function chrNewSubnetAddress() {
+        const match = chrDhcpNewSubnet.value.trim().match(/^([^/]+)\/(\d{1,2})$/);
+        if (!match || !isIpv4(match[1]) || Number(match[2]) < 1 || Number(match[2]) > 30) return '';
+        const address = match[1].split('.').map(Number).join('.');
+        const cidr = address + '/' + Number(match[2]);
+        try {
+            chrSubnet(cidr, address);
+            return cidr;
+        } catch {
+            return '';
+        }
     }
 
     function chrSubnet(address, gateway) {
@@ -3134,7 +3158,12 @@
 
     function suggestChrDhcp() {
         if (!chrDhcpState || !chrDhcpInterface.value) return;
-        const [iface, address] = JSON.parse(chrDhcpInterface.value);
+        const [iface, currentAddress] = JSON.parse(chrDhcpInterface.value);
+        const address = currentAddress || chrNewSubnetAddress();
+        if (!address) {
+            updateChrGateway();
+            return;
+        }
         const { first, last } = chrDhcpForm.elements;
         first.value = last.value = '';
         try {
@@ -3165,7 +3194,7 @@
     }
 
     function updateChrGateway() {
-        const address = chrDhcpInterface.value ? JSON.parse(chrDhcpInterface.value)[1] : '';
+        const address = chrDhcpInterface.value ? JSON.parse(chrDhcpInterface.value)[1] || chrNewSubnetAddress() : '';
         const option = document.createElement('option');
         option.value = ipOnly(address);
         document.getElementById('chrDhcpGateways').replaceChildren(...(address ? [option] : []));
@@ -3182,10 +3211,13 @@
 
     async function prepareChrDhcp(form, state) {
         if (!chrDhcpInterface.value) throw new Error('یک رابط LAN انتخاب کنید.');
-        const [iface, address] = JSON.parse(chrDhcpInterface.value);
-        if (!state.addresses.some(row => row.interface === iface && row.address === address)) {
-            throw new Error('رابط LAN باید IPv4 ثابت داشته باشد.');
+        const [iface, currentAddress] = JSON.parse(chrDhcpInterface.value);
+        const address = currentAddress || chrNewSubnetAddress();
+        if (!address || !state.interfaces.some(row => row.name === iface)
+            || (currentAddress && !state.addresses.some(row => row.interface === iface && row.address === address))) {
+            throw new Error('برای رابط LAN یک IPv4 ثابت معتبر انتخاب یا وارد کنید.');
         }
+        const needsAddress = !state.addresses.some(row => row.interface === iface && row.address === address);
         const server = editingChrDhcp && state.servers.find(row => row['.id'] === editingChrDhcp['.id']
             && row.name === editingChrDhcp.name && row.interface === iface && row['address-pool'] === editingChrDhcp['address-pool']);
         if (editingChrDhcp && !server) throw new Error('سرور تغییر کرده است. دوباره کارت را برای ویرایش باز کنید.');
@@ -3199,7 +3231,20 @@
         const dns = [...new Set(values.getAll('dns').flatMap(pair => pair.split(',')))];
         if (!dns.length) throw new Error('حداقل یک سرویس DNS انتخاب کنید.');
         if (![first, last, ...dns].every(isIpv4)) throw new Error('آدرس‌های IPv4 را بررسی کنید.');
-        const { toNumber, usable, subnet } = chrSubnet(address, gateway);
+        const { toNumber, usable, subnet, network, size } = chrSubnet(address, gateway);
+        if (!currentAddress && gateway !== ipOnly(address)) {
+            throw new Error('برای subnet جدید، Gateway باید IP رابط جدید CHR باشد.');
+        }
+        if (needsAddress) {
+            const overlapsAddress = state.allAddresses.some(row => {
+                const [host, prefix] = String(row.address || '').split('/');
+                if (!isIpv4(host) || !/^\d{1,2}$/.test(prefix) || Number(prefix) > 32) return false;
+                const otherSize = 2 ** (32 - Number(prefix));
+                const otherNetwork = Math.floor(toNumber(host) / otherSize) * otherSize;
+                return otherNetwork < network + size && network < otherNetwork + otherSize;
+            });
+            if (overlapsAddress) throw new Error('subnet جدید با یکی از آدرس‌های تعریف‌شده در CHR هم‌پوشانی دارد.');
+        }
         const inPool = ip => toNumber(ip) >= toNumber(first) && toNumber(ip) <= toNumber(last);
         const ownLeases = new Set(state.leases.filter(row => server && isTrue(row.dynamic)
             && (row['active-server'] || row.server) === server.name).flatMap(row => [row.address, row['active-address']]));
@@ -3231,6 +3276,7 @@
             return isIpv4(start) && isIpv4(end) && toNumber(start) <= toNumber(last) && toNumber(end) >= toNumber(first);
         }));
         if (overlaps) throw new Error('این محدوده با یک IP Pool موجود هم‌پوشانی دارد.');
+        if (needsAddress) await apiFetch('/ip/address', 'PUT', { address, interface: iface, comment: 'Exitflow DHCP LAN' });
         if (!pool) await apiFetch('/ip/pool', 'PUT', { name, ranges });
         if (!existing) await apiFetch('/ip/dhcp-server/network', 'PUT', { address: subnet, gateway, 'dns-server': dns.join(',') });
         if (server) {
@@ -3325,6 +3371,13 @@
         updateChrDhcpForm();
         if (!chrDhcpSuggest.disabled) suggestChrDhcp();
         else updateChrGateway();
+    });
+    chrDhcpNewSubnet.addEventListener('input', () => {
+        updateChrDhcpForm();
+        updateChrGateway();
+    });
+    chrDhcpNewSubnet.addEventListener('change', () => {
+        if (!chrDhcpSuggest.disabled) suggestChrDhcp();
     });
     chrGateway.addEventListener('input', updateChrGateway);
     chrDhcpForm.addEventListener('submit', event => {

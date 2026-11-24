@@ -930,8 +930,8 @@
                     <input id="chrDhcpNewSubnet" placeholder="192.168.24.2/24" dir="ltr" disabled>
                 </label>
                 <label>Gateway<input name="gateway" list="chrDhcpGateways" required dir="ltr"><datalist id="chrDhcpGateways"></datalist></label>
-                <label>ابتدای محدودهٔ IP<input name="first" required disabled dir="ltr"></label>
-                <label>انتهای محدودهٔ IP<input name="last" required disabled dir="ltr"></label>
+                <label>تعداد IP مورد نیاز<input name="count" type="number" min="1" step="1" required disabled dir="ltr" aria-describedby="chrDhcpRangePreview"></label>
+                <output id="chrDhcpRangePreview" aria-live="polite" dir="auto"></output>
                 <select id="chrDnsSelect" name="dns" multiple hidden></select>
                 <details class="chr-dns" id="chrDnsPicker">
                     <summary id="chrDnsSummary">انتخاب DNS</summary>
@@ -3069,7 +3069,7 @@
             return;
         }
         editingChrDhcp = server;
-        const [first, last = first] = (pool?.ranges || '').split('-');
+        const [[first] = []] = chrPoolRanges(pool);
         const current = options.find(option => {
             if (!isIpv4(first)) return false;
             const address = JSON.parse(option.value)[1];
@@ -3078,12 +3078,12 @@
         chrDhcpInterface.value = (current || options[0]).value;
         updateChrDhcpForm();
         suggestChrDhcp();
-        if (current && isIpv4(last)) {
-            chrDhcpForm.elements.first.value = first;
-            chrDhcpForm.elements.last.value = last;
+        if (current) {
+            chrDhcpForm.elements.count.value = chrPoolSize(pool) || 1;
+            updateChrGateway();
         }
         chrDhcpForm.scrollIntoView({ block: 'nearest' });
-        chrDhcpForm.elements.first.focus();
+        chrDhcpForm.elements.count.focus();
     }
 
     function updateChrDhcpForm() {
@@ -3094,7 +3094,7 @@
         chrDhcpNewSubnet.required = createSubnet;
         const newAddress = createSubnet ? chrNewSubnetAddress() : '';
         chrDhcpNewSubnet.setCustomValidity(createSubnet && chrDhcpNewSubnet.value && !newAddress
-            ? 'IPv4 رابط و پیشوند را وارد کنید، مثلاً 192.168.24.2/24.' : '');
+            ? 'آدرس رابط باید به ‎.2 ختم شود و پیشوند معتبر داشته باشد، مثلاً 192.168.24.2/24.' : '');
         chrDhcpEditCancel.hidden = !editingChrDhcp;
         chrDhcpPrepare.textContent = editingChrDhcp ? 'ذخیرهٔ محدوده' : 'ساخت DHCP غیرفعال';
         chrDhcpSuggest.disabled = chrDhcpPrepare.disabled = !chrDhcpState || !iface
@@ -3107,6 +3107,7 @@
         const match = chrDhcpNewSubnet.value.trim().match(/^([^/]+)\/(\d{1,2})$/);
         if (!match || !isIpv4(match[1]) || Number(match[2]) < 1 || Number(match[2]) > 30) return '';
         const address = match[1].split('.').map(Number).join('.');
+        if (!address.endsWith('.2')) return '';
         const cidr = address + '/' + Number(match[2]);
         try {
             chrSubnet(cidr, address);
@@ -3116,8 +3117,12 @@
         }
     }
 
+    function chrIpNumber(ip) {
+        return ip.split('.').reduce((value, part) => value * 256 + Number(part), 0);
+    }
+
     function chrSubnet(address, gateway) {
-        const toNumber = ip => ip.split('.').reduce((value, part) => value * 256 + Number(part), 0);
+        const toNumber = chrIpNumber;
         const [host, prefix] = address.split('/');
         const size = 2 ** (32 - Number(prefix));
         const network = Math.floor(toNumber(host) / size) * size;
@@ -3129,31 +3134,57 @@
         return { toNumber, usable, subnet, network, size };
     }
 
-    function suggestedChrRange(address, gateway, occupied, pools) {
+    function chrPoolRanges(pool) {
+        return (pool?.ranges || '').split(',').map(range => {
+            const [first, last = first] = range.trim().split('-');
+            return [first, last];
+        }).filter(([first, last]) => isIpv4(first) && isIpv4(last));
+    }
+
+    function chrPoolSize(pool) {
+        return chrPoolRanges(pool).reduce((total, [first, last]) => total + chrIpNumber(last) - chrIpNumber(first) + 1, 0);
+    }
+
+    function chrDhcpPoolName(state, iface, server) {
+        const oldPool = server && state.pools.find(row => row.name === server['address-pool']);
+        if (!server) return chrDhcpServerName(iface);
+        if (!oldPool || state.servers.some(row => row !== server && row['address-pool'] === oldPool.name)
+            || state.pools.some(row => row['next-pool'] === oldPool.name)) return chrDhcpServerName(iface) + '-range';
+        return oldPool.name;
+    }
+
+    function calculateChrDhcpRanges(state, iface, address, gateway, count, server) {
+        if (!Number.isSafeInteger(count) || count < 1) throw new Error('تعداد IP باید یک عدد صحیح مثبت باشد.');
         const { toNumber, network, size } = chrSubnet(address, gateway);
-        const blocked = [...occupied, gateway].map(ip => [toNumber(ip), toNumber(ip)]);
-        for (const pool of pools) {
-            for (const range of (pool.ranges || '').split(',')) {
-                const [first, last = first] = range.trim().split('-');
-                if (isIpv4(first) && isIpv4(last)) blocked.push([toNumber(first), toNumber(last)]);
+        const ownLeases = new Set(state.leases.filter(row => server && isTrue(row.dynamic)
+            && (row['active-server'] || row.server) === server.name).flatMap(row => [row.address, row['active-address']]));
+        const occupied = [...state.occupied.filter(ip => !ownLeases.has(ip)), ...state.routerIps, gateway, ipOnly(address)];
+        const blocked = occupied.map(ip => [toNumber(ip), toNumber(ip)]);
+        const poolName = chrDhcpPoolName(state, iface, server);
+        for (const pool of state.pools) {
+            if (pool.name !== poolName) {
+                for (const [first, last] of chrPoolRanges(pool)) blocked.push([toNumber(first), toNumber(last)]);
             }
         }
         blocked.sort((a, b) => a[0] - b[0]);
-        const gaps = [];
-        let cursor = network + 1;
+        const ranges = [];
+        const formatIp = value => [24, 16, 8, 0].map(shift => (value >>> shift) & 255).join('.');
         const end = network + size - 1;
+        const thirdHost = Math.floor(toNumber(ipOnly(address)) / 256) * 256 + 3;
+        let cursor = Math.max(network + 1, thirdHost);
+        let remaining = count;
         for (const [first, last] of [...blocked, [end, end]]) {
-            if (first > cursor) gaps.push([cursor, Math.min(first, end) - 1]);
+            const length = Math.min(remaining, Math.min(first, end) - cursor);
+            if (length > 0) {
+                const startIp = formatIp(cursor);
+                ranges.push(length === 1 ? startIp : startIp + '-' + formatIp(cursor + length - 1));
+                remaining -= length;
+            }
+            if (!remaining) return ranges.join(',');
             cursor = Math.max(cursor, last + 1);
             if (cursor >= end) break;
         }
-        const length = Math.min(50, Math.max(0, ...gaps.map(([first, last]) => last - first + 1)));
-        if (!length) throw new Error('در این subnet محدودهٔ آزاد برای پیشنهاد پیدا نشد.');
-        const candidates = gaps.filter(([first, last]) => last - first + 1 >= length);
-        const [start, last] = candidates[Math.floor(Math.random() * candidates.length)];
-        const first = start + Math.floor(Math.random() * (last - start - length + 2));
-        const formatIp = value => [24, 16, 8, 0].map(shift => (value >>> shift) & 255).join('.');
-        return [formatIp(first), formatIp(first + length - 1)];
+        throw new Error(`در این subnet از ‎.3 به بعد فقط ${count - remaining} آدرس آزاد است.`);
     }
 
     function suggestChrDhcp() {
@@ -3164,17 +3195,14 @@
             updateChrGateway();
             return;
         }
-        const { first, last } = chrDhcpForm.elements;
-        first.value = last.value = '';
         try {
             const host = ipOnly(address);
             const { subnet } = chrSubnet(address, host);
             const existing = chrDhcpState.networks.find(row => row.address === subnet);
-            chrGateway.value = existing?.gateway || host;
+            chrGateway.value = currentAddress ? existing?.gateway || host : host;
             const previousPool = !editingChrDhcp && chrDhcpState.pools.find(row => row.name === chrDhcpServerName(iface));
-            const range = previousPool?.ranges?.split('-');
-            [first.value, last.value] = range?.length === 2 && range.every(isIpv4)
-                ? range : suggestedChrRange(address, chrGateway.value, chrDhcpState.occupied, chrDhcpState.pools);
+            const count = chrDhcpForm.elements.count;
+            if (!count.value && previousPool) count.value = chrPoolSize(previousPool) || '';
             const providers = [...chrDnsOptions.querySelectorAll('button[data-dns]')].filter(button => button.dataset.dns.includes(','));
             const provider = providers[Math.floor(Math.random() * providers.length)];
             for (const option of chrDnsSelect.options) option.selected = false;
@@ -3194,7 +3222,10 @@
     }
 
     function updateChrGateway() {
-        const address = chrDhcpInterface.value ? JSON.parse(chrDhcpInterface.value)[1] || chrNewSubnetAddress() : '';
+        const [iface, currentAddress] = chrDhcpInterface.value ? JSON.parse(chrDhcpInterface.value) : [];
+        const address = currentAddress || (iface && chrNewSubnetAddress());
+        chrGateway.readOnly = Boolean(iface && !currentAddress);
+        if (chrGateway.readOnly) chrGateway.value = ipOnly(address);
         const option = document.createElement('option');
         option.value = ipOnly(address);
         document.getElementById('chrDhcpGateways').replaceChildren(...(address ? [option] : []));
@@ -3205,8 +3236,20 @@
             error = cause.message;
         }
         chrGateway.setCustomValidity(error);
-        const rangeDisabled = !address || !chrGateway.value.trim() || Boolean(error);
-        chrDhcpForm.elements.first.disabled = chrDhcpForm.elements.last.disabled = rangeDisabled;
+        const count = chrDhcpForm.elements.count;
+        const preview = document.getElementById('chrDhcpRangePreview');
+        count.disabled = !address || !chrGateway.value.trim() || Boolean(error);
+        count.setCustomValidity('');
+        preview.textContent = '';
+        if (!count.disabled && count.value && chrDhcpState) {
+            try {
+                const server = chrDhcpState.servers.find(row => row['.id'] === editingChrDhcp?.['.id']);
+                preview.textContent = calculateChrDhcpRanges(chrDhcpState, iface, address, chrGateway.value.trim(), Number(count.value), server);
+            } catch (cause) {
+                count.setCustomValidity(cause.message);
+                preview.textContent = cause.message;
+            }
+        }
     }
 
     async function prepareChrDhcp(form, state) {
@@ -3225,13 +3268,12 @@
             throw new Error('DHCP Server دیگری روی این رابط تعریف شده است.');
         }
         const values = new FormData(form);
-        const first = values.get('first').trim();
-        const last = values.get('last').trim();
+        const count = Number(values.get('count'));
         const gateway = values.get('gateway').trim();
         const dns = [...new Set(values.getAll('dns').flatMap(pair => pair.split(',')))];
         if (!dns.length) throw new Error('حداقل یک سرویس DNS انتخاب کنید.');
-        if (![first, last, ...dns].every(isIpv4)) throw new Error('آدرس‌های IPv4 را بررسی کنید.');
-        const { toNumber, usable, subnet, network, size } = chrSubnet(address, gateway);
+        if (!dns.every(isIpv4)) throw new Error('آدرس‌های IPv4 DNS را بررسی کنید.');
+        const { toNumber, subnet, network, size } = chrSubnet(address, gateway);
         if (!currentAddress && gateway !== ipOnly(address)) {
             throw new Error('برای subnet جدید، Gateway باید IP رابط جدید CHR باشد.');
         }
@@ -3245,14 +3287,6 @@
             });
             if (overlapsAddress) throw new Error('subnet جدید با یکی از آدرس‌های تعریف‌شده در CHR هم‌پوشانی دارد.');
         }
-        const inPool = ip => toNumber(ip) >= toNumber(first) && toNumber(ip) <= toNumber(last);
-        const ownLeases = new Set(state.leases.filter(row => server && isTrue(row.dynamic)
-            && (row['active-server'] || row.server) === server.name).flatMap(row => [row.address, row['active-address']]));
-        if (![first, last].every(usable) || toNumber(first) > toNumber(last)
-            || inPool(gateway) || state.routerIps.some(inPool)
-            || state.occupied.some(ip => inPool(ip) && !ownLeases.has(ip))) {
-            throw new Error('محدوده باید در subnet گیت‌وی باشد و با Gateway یا IPهای شناخته‌شدهٔ شبکه تداخل نداشته باشد.');
-        }
         const { networks, pools } = state;
         const existing = networks.find(row => row.address === subnet);
         if (existing) {
@@ -3260,22 +3294,14 @@
                 throw new Error('تنظیم DHCP این subnet از قبل وجود دارد و Gateway یا DNS آن متفاوت است.');
             }
         }
-        const ranges = first + '-' + last;
+        const ranges = calculateChrDhcpRanges(state, iface, address, gateway, count, server);
         const oldPool = server && pools.find(row => row.name === server['address-pool']);
-        const shared = oldPool && (state.servers.some(row => row !== server && row['address-pool'] === oldPool.name)
-            || pools.some(row => row['next-pool'] === oldPool.name));
-        const name = server && (!oldPool || shared) ? chrDhcpServerName(iface) + '-range'
-            : oldPool?.name || chrDhcpServerName(iface);
+        const name = chrDhcpPoolName(state, iface, server);
         if (state.servers.some(row => row !== server && (row.name === name || row['address-pool'] === name))) {
             throw new Error('نام سرور یا IP Pool پیشنهادی روی CHR در حال استفاده است.');
         }
         const pool = pools.find(row => row.name === name);
         if (pool && pool !== oldPool && pool.ranges !== ranges) throw new Error('محدودهٔ آماده‌شدهٔ قبلی متفاوت است.');
-        const overlaps = pools.some(row => row !== pool && (row.ranges || '').split(',').some(range => {
-            const [start, end = start] = range.trim().split('-');
-            return isIpv4(start) && isIpv4(end) && toNumber(start) <= toNumber(last) && toNumber(end) >= toNumber(first);
-        }));
-        if (overlaps) throw new Error('این محدوده با یک IP Pool موجود هم‌پوشانی دارد.');
         if (needsAddress) await apiFetch('/ip/address', 'PUT', { address, interface: iface, comment: 'Exitflow DHCP LAN' });
         if (!pool) await apiFetch('/ip/pool', 'PUT', { name, ranges });
         if (!existing) await apiFetch('/ip/dhcp-server/network', 'PUT', { address: subnet, gateway, 'dns-server': dns.join(',') });
@@ -3380,6 +3406,7 @@
         if (!chrDhcpSuggest.disabled) suggestChrDhcp();
     });
     chrGateway.addEventListener('input', updateChrGateway);
+    chrDhcpForm.elements.count.addEventListener('input', updateChrGateway);
     chrDhcpForm.addEventListener('submit', event => {
         event.preventDefault();
         const form = event.currentTarget;

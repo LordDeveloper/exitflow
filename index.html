@@ -956,7 +956,6 @@
                 <button type="submit" id="chrDhcpPrepare" disabled>ساخت DHCP غیرفعال</button>
                 <button type="button" id="chrDhcpEditCancel" hidden>انصراف از ویرایش</button>
             </form>
-            <p><label><input type="checkbox" id="chrDhcpReady"> دسترسی با IP ثابت را آزمایش کرده‌ام و DHCP مودم را خاموش کرده‌ام.</label></p>
             <p id="chrDhcpStatus" role="status"></p>
             <h3>سرورهای DHCP</h3>
             <div id="chrDhcpServers" class="chr-dhcp-cards"></div>
@@ -2917,7 +2916,6 @@
     const chrDhcpModem = document.getElementById('chrDhcpModem');
     const chrDhcpInterface = document.getElementById('chrDhcpInterface');
     const chrDhcpNewSubnet = document.getElementById('chrDhcpNewSubnet');
-    const chrDhcpReady = document.getElementById('chrDhcpReady');
     const chrDhcpPrepare = document.getElementById('chrDhcpPrepare');
     const chrDhcpRefresh = document.getElementById('chrDhcpRefresh');
     let chrDhcpState;
@@ -2958,7 +2956,7 @@
         };
     }
 
-    async function runChrDhcpAction(action) {
+    async function runChrDhcpAction(action, describeResult) {
         if (chrDhcpRefresh.disabled) return;
         const status = document.getElementById('chrDhcpStatus');
         const list = document.getElementById('chrDhcpServers');
@@ -2970,7 +2968,7 @@
             state = await readChrDhcp();
             const message = action ? await action(state) : '';
             if (action) state = await readChrDhcp();
-            status.textContent = message || 'وضعیت CHR دریافت شد.';
+            status.textContent = describeResult?.(state) || message || 'وضعیت CHR دریافت شد.';
         } catch (error) {
             if (action) state = await readChrDhcp().catch(() => null);
             status.textContent = error.message;
@@ -3042,10 +3040,9 @@
     }
 
     function changeChrDhcpServer(server, action) {
-        if (action === 'enable' && !chrDhcpReady.checked) {
-            document.getElementById('chrDhcpStatus').textContent = 'برای فعال‌سازی، دسترسی با IP ثابت و خاموش بودن DHCP مودم را تأیید کنید.';
-            return;
-        }
+        if (action === 'enable' && !window.confirm(
+            `DHCP «${server.name}» روی ${server.interface} فعال شود؟ اگر DHCP مودم روی همین شبکه است، ابتدا آن را خاموش کنید و دسترسی مدیریت با IP ثابت را بررسی کنید.`
+        )) return;
         if (action === 'delete' && !window.confirm(`سرور DHCP «${server.name}» روی ${server.interface} و منابع اختصاصی آن حذف شوند؟ دستگاه‌های این شبکه ممکن است اتصالشان را از دست بدهند.`)) return;
         return runChrDhcpAction(async state => {
             const { servers } = state;
@@ -3060,11 +3057,18 @@
             if (action === 'delete') {
                 const message = await removeChrDhcpServer(current, state);
                 if (editingChrDhcp?.['.id'] === current['.id']) editingChrDhcp = null;
-                chrDhcpReady.checked = false;
                 return message;
             }
             await apiFetch(path + '/' + assertId(current['.id']), 'PATCH', { disabled: action === 'enable' ? 'no' : 'yes' });
-            chrDhcpReady.checked = false;
+        }, action === 'delete' ? undefined : ({ servers }) => {
+            const updated = servers.find(row => row['.id'] === server['.id']);
+            if (!updated || isTrue(updated.disabled) !== (action === 'disable')) {
+                return `CHR تغییر وضعیت DHCP «${server.name}» را تأیید نکرد.`;
+            }
+            if (action === 'enable' && isTrue(updated.invalid)) {
+                return `DHCP «${server.name}» فعال شد، ولی CHR آن را نامعتبر گزارش می‌کند. رابط، IP ثابت و Pool را بررسی کنید.`;
+            }
+            return `DHCP «${server.name}» روی ${server.interface} ${action === 'enable' ? 'فعال' : 'غیرفعال'} شد.`;
         });
     }
 

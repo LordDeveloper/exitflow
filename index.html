@@ -3077,6 +3077,76 @@
         }
     }
 
+    function chrInternetNatTag(subnet) {
+        return 'Exitflow DHCP Internet: ' + subnet;
+    }
+
+    async function prepareChrInternet(network, modem, state) {
+        const current = state.networks.find(row => row['.id'] === network['.id']
+            && row.address === network.address && row.gateway === network.gateway);
+        if (!current || !chrGatewayCandidates(current, state).includes(current.gateway)) {
+            throw new Error('ابتدا Gateway کلاینت‌ها را روی IP خود CHR در همین subnet بگذارید.');
+        }
+        if (state.allAddresses.some(row => !isTrue(row.disabled) && ipOnly(row.address) === modem)) {
+            throw new Error('Gateway مودم نباید یکی از IPهای خود CHR باشد.');
+        }
+        const modemIp = chrIpNumber(modem);
+        const uplinks = new Set(state.allAddresses.filter(row => {
+            if (isTrue(row.disabled) || isTrue(row.invalid) || ipOnly(row.address) === modem) return false;
+            const bounds = chrDhcpSubnetBounds(row.address);
+            return bounds && modemIp > bounds[0] && modemIp < bounds[1];
+        }).map(row => row.interface));
+        if (uplinks.size !== 1) throw new Error('CHR باید روی یک رابط مشخص، IP فعال در subnet مودم داشته باشد.');
+        const [uplink] = uplinks;
+        const [routes, rules] = await Promise.all([
+            apiList('/ip/route?.proplist=dst-address,routing-table,active,disabled,gateway,immediate-gw'),
+            apiList('/ip/firewall/nat?.proplist=chain,action,disabled,out-interface,src-address,comment')
+        ]);
+        const defaults = routes.filter(row => row['dst-address'] === '0.0.0.0/0'
+            && row['routing-table'] === 'main' && !isTrue(row.disabled));
+        const viaModem = row => [row['immediate-gw'], row.gateway].some(value => String(value || '').split('%')[0] === modem);
+        if (defaults.some(row => isTrue(row.active) && !viaModem(row))) {
+            throw new Error('مسیر پیش‌فرض فعال از Gateway دیگری می‌گذرد. ابتدا آن را در روتر بررسی کنید.');
+        }
+        if (!defaults.some(viaModem)) {
+            await apiFetch('/ip/route', 'PUT', {
+                'dst-address': '0.0.0.0/0', 'routing-table': 'main', gateway: modem, comment: 'Exitflow modem gateway'
+            });
+        }
+        const tag = chrInternetNatTag(current.address);
+        if (!rules.some(row => row.comment === tag && row.chain === 'srcnat' && !isTrue(row.disabled)
+            && row.action === 'masquerade' && row['src-address'] === current.address && row['out-interface'] === uplink)) {
+            await apiFetch('/ip/firewall/nat', 'PUT', {
+                chain: 'srcnat', action: 'masquerade', 'src-address': current.address, 'out-interface': uplink, comment: tag
+            });
+        }
+        const updated = await apiList('/ip/route?.proplist=dst-address,routing-table,active,gateway,immediate-gw');
+        return updated.some(row => row['dst-address'] === '0.0.0.0/0' && row['routing-table'] === 'main'
+            && isTrue(row.active) && viaModem(row))
+            ? `مسیر از مودم ${modem} فعال است و NAT برای ${current.address} آماده شد. اینترنت را از یک کلاینت آزمایش کنید.`
+            : 'NAT آماده شد، ولی CHR هنوز مسیر پیش‌فرض فعال از مودم را گزارش نکرد.';
+    }
+
+    async function removeChrNetworkNat(network) {
+        const rules = await apiList('/ip/firewall/nat?.proplist=.id,chain,action,src-address,comment');
+        for (const row of rules) {
+            if (row.chain === 'srcnat' && row.action === 'masquerade' && row['src-address'] === network.address
+                && row.comment === chrInternetNatTag(network.address)) await deleteById('/ip/firewall/nat', row['.id']);
+        }
+    }
+
+    function orphanChrAddresses(network, state) {
+        const bounds = chrDhcpSubnetBounds(network.address);
+        const managementIp = new URL(getBaseUrl()).hostname;
+        if (!bounds || chrDhcpNetworkInUse(network, state)) return [];
+        return state.allAddresses.filter(row => {
+            const comment = row.comment || '';
+            return row['.id'] && !isTrue(row.dynamic) && ipOnly(row.address) !== managementIp
+                && (comment === 'Exitflow DHCP LAN' || comment.startsWith('Exitflow DHCP: '))
+                && chrDhcpSubnetBounds(row.address)?.every((value, index) => value === bounds[index]);
+        });
+    }
+
     function renderChrDhcpNetworks(container, state) {
         if (!state.networks.length) container.textContent = 'رکوردی در DHCP Networks وجود ندارد.';
         for (const network of state.networks) {
@@ -3090,6 +3160,17 @@
             const description = document.createElement('span');
             description.textContent = inUse ? 'وابسته به DHCP یا Lease موجود' : 'بلااستفاده';
             card.append(title, gateway, description);
+            if (inUse && chrGatewayCandidates(network, state).includes(network.gateway)) {
+                card.append(relayButton('تنظیم اینترنت از مودم', 'success', () => {
+                    const modem = window.prompt('IP گیت‌وی مودم را وارد کنید. پنل مسیر پیش‌فرض و NAT اختصاصی این subnet را تنظیم می‌کند.', '192.168.70.1')?.trim();
+                    if (!modem) return;
+                    if (!isIpv4(modem)) {
+                        document.getElementById('chrDhcpStatus').textContent = 'IP گیت‌وی مودم معتبر نیست.';
+                        return;
+                    }
+                    void runChrDhcpAction(next => prepareChrInternet(network, modem, next));
+                }));
+            }
             const candidates = chrGatewayCandidates(network, state).filter(ip => ip !== network.gateway);
             if (candidates.length) {
                 const actions = document.createElement('div');
@@ -3114,12 +3195,19 @@
                 const actions = document.createElement('footer');
                 actions.className = 'relay-actions';
                 actions.append(relayButton('حذف رکورد', 'danger', () => {
-                    if (!window.confirm(`رکورد DHCP Network برای ${network.address} حذف شود؟`)) return;
+                    const removableIps = orphanChrAddresses(network, state);
+                    const extra = removableIps.length ? ' و IPهای اختصاصی Exitflow (' + removableIps.map(row => row.address).join('، ') + ')' : '';
+                    if (!window.confirm(`رکورد DHCP Network برای ${network.address}${extra} و NAT اختصاصی Exitflow حذف شوند؟`)) return;
                     void runChrDhcpAction(async currentState => {
                         const current = currentState.networks.find(row => row['.id'] === network['.id'] && row.address === network.address);
                         if (!current || chrDhcpNetworkInUse(current, currentState)) {
                             throw new Error('رکورد تغییر کرده یا هنوز به DHCP وابسته است.');
                         }
+                        const confirmed = new Set(removableIps.map(row => row['.id']));
+                        for (const row of orphanChrAddresses(current, currentState)) {
+                            if (confirmed.has(row['.id'])) await deleteById('/ip/address', row['.id']);
+                        }
+                        await removeChrNetworkNat(current);
                         await deleteById('/ip/dhcp-server/network', current['.id']);
                         return `رکورد DHCP Network برای ${current.address} حذف شد.`;
                     });
@@ -3220,7 +3308,7 @@
         const serverRanges = chrPoolRanges(serverPool);
         const legacyAddressFor = row => {
             if (row.interface !== server.interface || isTrue(row.dynamic) || row.comment !== 'Exitflow DHCP LAN'
-                || !poolsToRemove.includes(serverPool)) return false;
+                || !serverPool) return false;
             const bounds = chrDhcpSubnetBounds(row.address);
             return bounds && serverRanges.some(([first, last]) =>
                 chrIpNumber(first) >= bounds[0] && chrIpNumber(last) <= bounds[1]);
@@ -3261,6 +3349,7 @@
         ]) {
             for (const row of rows) {
                 try {
+                    if (path === '/ip/dhcp-server/network') await removeChrNetworkNat(row);
                     await deleteById(path, row['.id']);
                 } catch (error) {
                     failed.push(label + ' ' + (row.name || row.address || row['.id']));

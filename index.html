@@ -50,10 +50,14 @@
                 var(--bg);
             color: var(--text);
             margin: 0;
-            padding: 22px;
+            padding: 20px 16px 36px;
             line-height: 1.5;
         }
-        .container { max-width: 1680px; margin: 0 auto; }
+        .container {
+            width: min(100%, 1180px);
+            max-width: 1180px;
+            margin: 0 auto;
+        }
         .page-head {
             display: flex;
             justify-content: space-between;
@@ -661,14 +665,14 @@
         .relay-feedback { justify-content: space-between; color: var(--muted); font-size: 12px; }
         .relay-feedback span:empty { display: none; }
         #relayCatalogRows, .client-cards { display: grid; grid-auto-rows: 1fr; grid-template-columns: minmax(0, 1fr); gap: 12px; }
-        @media (min-width: 768px) {
+        @media (min-width: 700px) {
             #relayCatalogRows, .client-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         }
-        @media (min-width: 1100px) {
+        @media (min-width: 980px) {
             #relayCatalogRows, .client-cards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
         }
-        @media (min-width: 1440px) {
-            #relayCatalogRows, .client-cards { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+        @media (min-width: 1180px) {
+            #relayCatalogRows, .client-cards { grid-template-columns: repeat(4, minmax(0, 1fr)); }
         }
         @media (min-width: 681px) and (max-width: 1000px) { .relay-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
         .relay-city { display: flex; flex-direction: column; width: 100%; border: 1px solid #3a3032; border-radius: 16px; padding: 12px; min-width: 0; background: #1a1416; position: relative; isolation: isolate; transition: border-color .15s ease, box-shadow .15s ease; }

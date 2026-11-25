@@ -508,34 +508,7 @@
         .mtr-table th { background: #0b1220; color: var(--muted); position: static; }
         .mtr-loss-high { color: #f87171; font-weight: 700; }
         .mtr-loss-ok { color: #34d399; }
-        .audit-summary-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-            gap: 10px;
-            margin-bottom: 14px;
-        }
-        .audit-kpi {
-            background: var(--card-inner);
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            padding: 10px 12px;
-        }
-        .audit-kpi .kpi-label { font-size: 11px; color: var(--muted); }
-        .audit-kpi .kpi-val { font-size: 18px; font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; }
-        .audit-section-title {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 10px;
-            margin: 14px 0 8px;
-            padding-bottom: 6px;
-            border-bottom: 1px solid var(--border);
-        }
-        .audit-section-title h3 { margin: 0; font-size: 14px; color: #e2e8f0; }
         .code-ltr { direction: ltr; text-align: left; font-family: monospace; font-size: 11.5px; unicode-bidi: isolate; }
-        .row-warn { background: rgba(245, 158, 11, 0.08); }
-        .row-bad { background: rgba(239, 68, 68, 0.11); }
-        .row-ok { background: rgba(16, 185, 129, 0.04); }
 
         .relay-settings-panel > h3 { margin: 0; font-size: 15px; }
         .relay-management > h2 { margin: 0; font-size: 17px; }
@@ -915,8 +888,6 @@
             <button type="button" class="tab active" data-tab="clients" role="tab" aria-selected="true" aria-controls="tabClients">کلاینت‌ها</button>
             <button type="button" class="tab" data-tab="chr" role="tab" aria-selected="false" aria-controls="tabChr">تنظیمات DHCP</button>
             <button type="button" class="tab" data-tab="wireguard" role="tab" aria-selected="false" aria-controls="tabWireguard">اینترفیس‌های WireGuard <span class="tab-count" id="wgTabCount">0</span></button>
-            <button type="button" class="tab" data-tab="pathtest" role="tab" aria-selected="false" aria-controls="tabPathTest">تست مسیر</button>
-            <button type="button" class="tab" data-tab="rulesaudit" role="tab" aria-selected="false" aria-controls="tabRulesAudit">بررسی Ruleها و عوامل موثر <span class="tab-count" id="auditIssueCount">0</span></button>
         </div>
         <div class="tab-live">
             <button type="button" id="liveToggleBtn" class="warning compact" style="display:none;">توقف آپدیت زنده</button>
@@ -1047,44 +1018,6 @@
         </section>
     </div>
 
-    <div id="tabPathTest" class="tab-panel" role="tabpanel" hidden>
-        <div class="card">
-            <div class="header-flex">
-                <h2>تست مسیر بدون کلاینت</h2>
-                <button type="button" class="info compact" id="openDiagFromTabBtn">🩺 عیب‌یابی پیشرفته و MTR</button>
-            </div>
-            <div class="grid" style="align-items: end; margin-bottom: 12px;">
-                <div>
-                    <label class="field">انتخاب Peer مولواد</label>
-                    <div class="peer-picker" id="pathTestPicker">
-                        <button type="button" class="peer-picker-btn" aria-expanded="false" aria-haspopup="listbox">
-                            <span class="peer-picker-name">انتخاب Peer...</span>
-                            <span class="peer-picker-meta">جستجو بر اساس کشور، شهر یا نام</span>
-                        </button>
-                        <div class="peer-picker-menu" hidden>
-                            <input type="text" class="peer-picker-search" dir="auto" placeholder="جستجوی کشور، شهر یا نام Peer" autocomplete="off">
-                            <div class="peer-picker-list" role="listbox"></div>
-                        </div>
-                        <input type="hidden" id="pathTestPeerValue" data-field="peer-value" value="">
-                    </div>
-                </div>
-                <div>
-                    <label class="field" for="pathTestTargetIp">آی‌پی یا دامنه مقصد پینگ</label>
-                    <input type="text" id="pathTestTargetIp" dir="ltr" spellcheck="false" autocomplete="off" placeholder="1.1.1.1" value="1.1.1.1" style="width: 100%;">
-                </div>
-                <div>
-                    <label class="field" for="pathTestCount">تعداد بسته</label>
-                    <input type="number" id="pathTestCount" dir="ltr" min="1" max="20" value="3" style="width: 100%;">
-                </div>
-                <div>
-                    <label class="field">&nbsp;</label>
-                    <button type="button" id="pathTestBtn" style="width: 100%;">شروع تست مسیر</button>
-                </div>
-            </div>
-            <div id="pathTestResult" class="test-result muted">۳ بسته به 1.1.1.1 از طریق اینترفیس همان Peer فرستاده می‌شود.</div>
-        </div>
-    </div>
-
     <div id="tabChr" class="tab-panel" role="tabpanel" hidden>
         <section class="card dhcp-board">
             <div class="dhcp-head">
@@ -1131,81 +1064,6 @@
             <p id="chrDhcpStatus" role="status"></p>
             <div id="chrDhcpServers" class="dhcp-servers"></div>
         </section>
-    </div>
-
-    <div id="tabRulesAudit" class="tab-panel" role="tabpanel" hidden>
-        <div class="card">
-            <div class="header-flex">
-                <div>
-                    <h2>بررسی Ruleها و تمام عوامل تاثیرگذار بر مسیریابی و WireGuard</h2>
-                    <p class="muted" style="margin: 4px 0 0;">تحلیل زنده Routing Rules، Mangle، IP Routes، Firewall NAT/Filter، FastTrack، Address Lists (MVIPs / کلاینت‌ها) و وضعیت اینترفیس‌ها</p>
-                </div>
-                <div class="filter-box">
-                    <select id="auditPeerFilter" dir="ltr" style="min-width: 210px;">
-                        <option value="">همه Peerها و مسیرها</option>
-                    </select>
-                    <label class="switch" for="auditOnlyIssues">
-                        <input type="checkbox" id="auditOnlyIssues">
-                        <span class="switch-ui" aria-hidden="true"></span>
-                        <span>فقط موارد دارای هشدار / خطا</span>
-                    </label>
-                    <button type="button" class="info compact" id="auditRefreshBtn">🔄 بررسی مجدد</button>
-                    <button type="button" class="warning compact" id="auditAutoFixBtn">🛠 اصلاح خودکار قوانین</button>
-                </div>
-            </div>
-
-            <div class="audit-summary-grid" id="auditKpiGrid">
-                <div class="audit-kpi"><div class="kpi-label">وضعیت کلی سیستم</div><div class="kpi-val" id="kpiOverall">-</div></div>
-                <div class="audit-kpi"><div class="kpi-label">تعداد خطا (Critical)</div><div class="kpi-val" id="kpiBad" style="color:#f87171;">0</div></div>
-                <div class="audit-kpi"><div class="kpi-label">تعداد هشدار (Warning)</div><div class="kpi-val" id="kpiWarn" style="color:#fbbf24;">0</div></div>
-                <div class="audit-kpi"><div class="kpi-label">تعداد Ruleهای بررسی‌شده</div><div class="kpi-val" id="kpiTotalRules" style="color:#93c5fd;">0</div></div>
-            </div>
-
-            <div class="diag-summary" id="auditDiagnosisBox">برای بررسی کامل Ruleها و عوامل تاثیرگذار، به روتر متصل شوید یا روی «بررسی مجدد» کلیک کنید.</div>
-
-            <div class="audit-section-title">
-                <h3>۱. عوامل تاثیرگذار زیرساختی و ارتباطی (Interfaces, Handshake, FastTrack, MVIPs, Routes)</h3>
-                <span class="muted" id="auditFactorsMeta"></span>
-            </div>
-            <div class="table-wrap" style="max-height: 45vh; border: 1px solid var(--border); margin-bottom: 14px;">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>وضعیت</th>
-                            <th>عامل / بخش</th>
-                            <th>مقدار / وضعیت فعلی</th>
-                            <th>تحلیل تاثیر بر مسیر</th>
-                            <th>عملیات</th>
-                        </tr>
-                    </thead>
-                    <tbody id="auditFactorsBody">
-                        <tr><td colspan="5" class="empty">هنوز بررسی انجام نشده است.</td></tr>
-                    </tbody>
-                </table>
-            </div>
-
-            <div class="audit-section-title">
-                <h3>۲. جدول کامل Ruleها (Routing Rules، Firewall Mangle، NAT و Filter) و بررسی ترتیب/تداخل</h3>
-                <span class="muted" id="auditRulesMeta"></span>
-            </div>
-            <div class="table-wrap" style="max-height: 55vh; border: 1px solid var(--border);">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>#</th>
-                            <th>نوع / زنجیره</th>
-                            <th>مشخصات Rule (Match & Action)</th>
-                            <th>جدول / Routing Mark / Out-Iface</th>
-                            <th>وضعیت و تحلیل تاثیر</th>
-                            <th>عملیات</th>
-                        </tr>
-                    </thead>
-                    <tbody id="auditRulesBody">
-                        <tr><td colspan="6" class="empty">هنوز بررسی انجام نشده است.</td></tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
     </div>
 </div>
 
@@ -2516,19 +2374,15 @@
     }
 
     function paintPickerButton(picker, value) {
-        const isPathPicker = picker.id === 'pathTestPicker';
-        const wg = wgInterfaces.find((item) => item.name === value) || (isPathPicker ? wgCatalog.find((item) => item.name === value) : null);
+        const wg = wgInterfaces.find((item) => item.name === value);
         const button = picker.querySelector('.peer-picker-btn');
         button.classList.toggle('is-down', Boolean(wg && wg.disabled));
         if (wg) {
             setText(picker.querySelector('.peer-picker-name'), peerLabel(wg));
             setText(picker.querySelector('.peer-picker-meta'), peerMeta(wg));
-        } else if (value && !isPathPicker) {
+        } else if (value) {
             setText(picker.querySelector('.peer-picker-name'), value);
             setText(picker.querySelector('.peer-picker-meta'), 'اطلاعات Peer در فهرست فعلی موجود نیست');
-        } else if (isPathPicker) {
-            setText(picker.querySelector('.peer-picker-name'), 'انتخاب Peer...');
-            setText(picker.querySelector('.peer-picker-meta'), wgInterfaces.length ? 'جستجو بر اساس کشور، شهر یا نام' : 'ابتدا به روتر متصل شوید');
         } else {
             setText(picker.querySelector('.peer-picker-name'), 'اینترنت عادی');
             setText(picker.querySelector('.peer-picker-meta'), 'بدون مولواد');
@@ -2539,31 +2393,19 @@
         }
     }
 
-    function pickerPeerOptions(picker) {
-        const list = picker.id !== 'pathTestPicker'
-            ? wgInterfaces.filter(peer => !peer.disabled)
-            : (!wgCatalog.length ? wgInterfaces : wgCatalog.map(model => ({
-                name: model.name,
-                comment: model.comment,
-                disabled: model.disabled,
-                endpoint: model.health?.endpoint || '',
-                handshake: model.health?.text || 'بدون هندشیک'
-            })));
-        return list.slice().sort(comparePeersByPing);
+    function pickerPeerOptions() {
+        return wgInterfaces.filter(peer => !peer.disabled).slice().sort(comparePeersByPing);
     }
 
     function fillPickerList(picker, current) {
-        const isPathPicker = picker.id === 'pathTestPicker';
         const list = picker.querySelector('.peer-picker-list');
         const fragment = document.createDocumentFragment();
-        if (!isPathPicker) {
-            const direct = document.createElement('button');
-            direct.type = 'button';
-            direct.className = 'peer-option' + (current ? '' : ' active');
-            direct.dataset.peer = '';
-            direct.innerHTML = '<span class="peer-option-name">اینترنت عادی</span><span class="peer-option-hs">بدون مولواد</span>';
-            fragment.appendChild(direct);
-        }
+        const direct = document.createElement('button');
+        direct.type = 'button';
+        direct.className = 'peer-option' + (current ? '' : ' active');
+        direct.dataset.peer = '';
+        direct.innerHTML = '<span class="peer-option-name">اینترنت عادی</span><span class="peer-option-hs">بدون مولواد</span>';
+        fragment.appendChild(direct);
         const sourceList = pickerPeerOptions(picker);
         sourceList.forEach((wg) => {
             const option = document.createElement('button');
@@ -2694,12 +2536,10 @@
         const hidden = picker.querySelector('[data-field="peer-value"]');
         hidden.value = value || '';
         const changed = hidden.value !== picker.dataset.assigned;
-        if (picker.id !== 'pathTestPicker') picker.dataset.draft = changed ? '1' : '';
+        picker.dataset.draft = changed ? '1' : '';
         closeAllPickers();
         paintPickerButton(picker, hidden.value);
-        if (picker.id !== 'pathTestPicker' && changed) {
-            hidden.dispatchEvent(new Event('change', { bubbles: true }));
-        }
+        if (changed) hidden.dispatchEvent(new Event('change', { bubbles: true }));
     }
 
     function showWiredEnabled() {
@@ -2828,15 +2668,6 @@
 
     function paintPeerTest(name) {
         const info = peerTests.get(name);
-        const bar = document.getElementById('pathTestResult');
-        const barButton = document.getElementById('pathTestBtn');
-        const selectedVal = document.getElementById('pathTestPeerValue');
-        if (bar && info && !info.endpoint && selectedVal && (selectedVal.dataset.activePeer === name || selectedVal.value === name)) {
-            bar.className = 'test-result ' + (info.state === 'ok' ? 'ok' : ['fail', 'error'].includes(info.state) ? 'bad' : 'muted');
-            bar.textContent = name + ' — ' + info.text;
-        }
-        const selectedTest = peerTests.get(selectedVal?.value);
-        if (barButton) barButton.disabled = selectedTest?.state === 'running';
         if (info && info.state !== 'running' && info.avg !== info.previousAvg) relayPingOrderDirty = true;
         if (!relayPingPaintPending) {
             relayPingPaintPending = true;
@@ -2934,8 +2765,6 @@
             return;
         }
         const countNum = endpoint ? 1 : Math.min(20, Math.max(1, Number(customCount) || 3));
-        const selectedVal = document.getElementById('pathTestPeerValue');
-        if (selectedVal && !endpoint) selectedVal.dataset.activePeer = name;
         const previous = peerTests.get(name);
         const previousAvg = previous?.avg;
         peerTests.set(name, { state: 'running', target, endpoint, avg: previousAvg, checkedAt: previous?.checkedAt, text: endpoint ? '' : `در حال فرستادن ${countNum} بسته به ${target}…` });
@@ -2956,33 +2785,6 @@
         const test = peerTests.get(name);
         if (!quiet) showRelayToast('تست پینگ · ' + name, test.text, test.state !== 'ok');
         paintPeerTest(name);
-    }
-
-    function testPeerFromQuery() {
-        const bar = document.getElementById('pathTestResult');
-        if (!monitoring) {
-            setStatus('اول به روتر متصل شو.', true);
-            return;
-        }
-        const peerName = document.getElementById('pathTestPeerValue').value;
-        if (!peerName) {
-            if (bar) {
-                bar.className = 'test-result bad';
-                bar.textContent = 'لطفاً ابتدا یک Peer از لیست انتخاب کنید.';
-            }
-            return;
-        }
-        const rawTarget = document.getElementById('pathTestTargetIp').value;
-        const target = normalizePingTarget(rawTarget);
-        if (!target) {
-            if (bar) {
-                bar.className = 'test-result bad';
-                bar.textContent = 'آی‌پی یا دامنه مقصد نامعتبر است (مثلاً 1.1.1.1 یا 8.8.8.8).';
-            }
-            return;
-        }
-        const count = document.getElementById('pathTestCount').value;
-        testPeerPath(peerName, null, target, count);
     }
 
     function badgeHtml(lists) {
@@ -3120,19 +2922,14 @@
     function showTab(name) {
         document.getElementById('tabClients').hidden = name !== 'clients';
         document.getElementById('tabWireguard').hidden = name !== 'wireguard';
-        document.getElementById('tabPathTest').hidden = name !== 'pathtest';
         document.getElementById('tabChr').hidden = name !== 'chr';
         if (name === 'chr') void runChrDhcpAction();
-        document.getElementById('tabRulesAudit').hidden = name !== 'rulesaudit';
         document.querySelectorAll('#mainTabs .tab').forEach((button) => {
             const selected = button.dataset.tab === name;
             button.classList.toggle('active', selected);
             button.setAttribute('aria-selected', selected ? 'true' : 'false');
         });
         if (name === 'wireguard') loadRelayPanel();
-        if (name === 'rulesaudit' && monitoring) {
-            runRulesAndFactorsAudit();
-        }
     }
 
     let chrDnsFieldSerial = 0;
@@ -4699,8 +4496,6 @@
                 return rank(a) - rank(b) || a.name.localeCompare(b.name, 'en');
             });
             document.getElementById('wgTabCount').textContent = String(wgCatalog.filter(isListedWireGuardPeer).length);
-            const pathPicker = document.getElementById('pathTestPicker');
-            setPickerValue(pathPicker, pickerValue(pathPicker), false);
             if (monitoring && !relayBusy && syncInstalledRelays(wgList, wgPeers)
                 && !document.getElementById('tabWireguard').hidden) {
                 renderRelayManagement();
@@ -5159,51 +4954,6 @@
         if (!button) return;
         showTab(button.dataset.tab);
     });
-    document.getElementById('pathTestBtn').addEventListener('click', testPeerFromQuery);
-    ['pathTestTargetIp', 'pathTestCount'].forEach((id) => {
-        const el = document.getElementById(id);
-        if (el) {
-            el.addEventListener('keydown', (event) => {
-                if (event.key === 'Enter') testPeerFromQuery();
-            });
-        }
-    });
-    const pathTestPickerEl = document.getElementById('pathTestPicker');
-    if (pathTestPickerEl) {
-        pathTestPickerEl.addEventListener('click', (event) => {
-            const option = event.target.closest('.peer-option');
-            if (option) {
-                choosePeer(pathTestPickerEl, option.dataset.peer || '');
-                const bar = document.getElementById('pathTestResult');
-                const target = normalizePingTarget(document.getElementById('pathTestTargetIp').value) || '1.1.1.1';
-                const cnt = Math.min(20, Math.max(1, Number(document.getElementById('pathTestCount').value) || 3));
-                if (bar && option.dataset.peer) {
-                    bar.className = 'test-result muted';
-                    bar.textContent = `${cnt} بسته به ${target} از طریق ${option.dataset.peer} فرستاده می‌شود.`;
-                }
-                return;
-            }
-            const opener = event.target.closest('.peer-picker-btn');
-            if (opener) {
-                togglePicker(pathTestPickerEl);
-            }
-        });
-        pathTestPickerEl.addEventListener('input', (event) => {
-            if (!event.target.classList.contains('peer-picker-search')) return;
-            filterPickerList(pathTestPickerEl);
-        });
-        pathTestPickerEl.addEventListener('keydown', (event) => {
-            if (!event.target.classList.contains('peer-picker-search')) return;
-            if (event.key === 'Escape') {
-                closeAllPickers();
-                event.stopPropagation();
-            } else if (event.key === 'Enter') {
-                event.preventDefault();
-                const first = pathTestPickerEl.querySelector('.peer-option:not([hidden])');
-                if (first) choosePeer(pathTestPickerEl, first.dataset.peer || '');
-            }
-        });
-    }
     function availableWireGuardPort(interfaces) {
         const used = new Set(interfaces.map(iface => Number(iface['listen-port'])));
         for (let port = 49152; port <= 65535; port += 1) {
@@ -5831,7 +5581,6 @@
         closeRelayChangeModal();
         if (!pickerOpen && !modalOpen && relaySelectionMode) cancelRelaySelection();
     });
-    document.getElementById('openDiagFromTabBtn').addEventListener('click', () => openDiagnoseModal(''));
     document.getElementById('diagCloseBtn').addEventListener('click', closeDiagnoseModal);
     document.getElementById('diagModal').addEventListener('click', (e) => {
         if (e.target.id === 'diagModal') closeDiagnoseModal();
@@ -5881,416 +5630,6 @@
         }
     });
 
-
-    function syncAuditPeerOptions() {
-        const sel = document.getElementById('auditPeerFilter');
-        if (!sel) return;
-        const prev = sel.value;
-        const list = wgCatalog.length ? wgCatalog : wgInterfaces;
-        sel.innerHTML = '<option value="">همه Peerها و مسیرها</option>';
-        list.forEach((wg) => {
-            const opt = document.createElement('option');
-            opt.value = wg.name;
-            opt.textContent = peerLabel(wg);
-            sel.appendChild(opt);
-        });
-        if (prev && Array.from(sel.options).some((o) => o.value === prev)) {
-            sel.value = prev;
-        }
-    }
-
-    async function toggleRuleDisabled(resourcePath, ruleId, currentlyDisabled) {
-        if (!monitoring || busy || !ruleId) return;
-        setBusy(true);
-        try {
-            await apiFetch(`${resourcePath}/${assertId(ruleId)}`, 'PATCH', {
-                disabled: currentlyDisabled ? 'false' : 'true'
-            });
-            setStatus(`وضعیت Rule (${ruleId}) تغییر کرد.`);
-            await runRulesAndFactorsAudit();
-        } catch (err) {
-            setStatus('خطا در تغییر وضعیت Rule: ' + err.message, true);
-        } finally {
-            setBusy(false);
-        }
-    }
-
-    async function runRulesAndFactorsAudit() {
-        if (!monitoring) {
-            setStatus('اول به روتر متصل شو.', true);
-            return;
-        }
-        syncAuditPeerOptions();
-        const selectedPeer = (document.getElementById('auditPeerFilter')?.value || '').trim();
-        const onlyIssues = Boolean(document.getElementById('auditOnlyIssues')?.checked);
-        const factorsBody = document.getElementById('auditFactorsBody');
-        const rulesBody = document.getElementById('auditRulesBody');
-        const diagBox = document.getElementById('auditDiagnosisBox');
-        const refreshBtn = document.getElementById('auditRefreshBtn');
-
-        if (refreshBtn) refreshBtn.disabled = true;
-        diagBox.innerHTML = 'در حال دریافت و تحلیل تمام Ruleها، مسیرها، اینترفیس‌ها و عوامل تاثیرگذار از روتر...';
-
-        try {
-            const [ifaces, wgPeers, routingRules, mangles, routes, nats, filters, addrLists] = await Promise.all([
-                apiList('/interface?.proplist=.id,name,type,running,disabled,rx-byte,tx-byte,comment'),
-                apiList('/interface/wireguard/peers?.proplist=.id,interface,endpoint-address,endpoint-port,current-endpoint-address,current-endpoint-port,last-handshake,rx,tx,disabled'),
-                apiList('/routing/rule?.proplist=.id,src-address,dst-address,routing-mark,action,table,routing-table,comment,disabled'),
-                apiList('/ip/firewall/mangle?.proplist=.id,chain,action,src-address,dst-address,src-address-list,dst-address-list,protocol,dst-port,new-routing-mark,routing-mark,passthrough,bytes,comment,disabled'),
-                apiList('/ip/route?.proplist=.id,dst-address,gateway,routing-table,distance,active,disabled,comment'),
-                apiList('/ip/firewall/nat?.proplist=.id,chain,action,src-address,dst-address,out-interface,in-interface,bytes,comment,disabled'),
-                apiList('/ip/firewall/filter?.proplist=.id,chain,action,src-address,dst-address,src-address-list,dst-address-list,protocol,dst-port,connection-state,bytes,comment,disabled'),
-                apiList('/ip/firewall/address-list?.proplist=.id,list,address,comment,disabled')
-            ]);
-
-            const factors = [];
-            const auditedRules = [];
-
-            // --- تحلیل عوامل تاثیرگذار ---
-            const exitTunnel = ifaces.find((i) => i.name === 'exit');
-            const exitTunnelUp = exitTunnel && !isTrue(exitTunnel.disabled) && isTrue(exitTunnel.running);
-            factors.push({
-                level: exitTunnelUp ? 'ok' : 'bad',
-                factor: 'اینترفیس بالادستی (exit)',
-                current: !exitTunnel ? 'موجود نیست' : (isTrue(exitTunnel.disabled) ? 'Disabled' : (exitTunnelUp ? 'Up & Running' : 'Down / Not Running')),
-                analysis: exitTunnelUp
-                    ? 'مسیر بالادستی فعال است و برای عبور هندشیک/ترافیک mv2tr آماده است.'
-                    : 'قطع یا غیرفعال بودن exit باعث شکست هندشیک سرورهای WireGuard و قطع ارتباط می‌شود.',
-                actionHtml: '<span class="muted">-</span>'
-            });
-
-            const fasttrackRules = filters.filter((r) => r.action === 'fasttrack-connection' && !isTrue(r.disabled));
-            const bypassRules = filters.filter((r) => /bypass fasttrack/i.test(r.comment || '') && !isTrue(r.disabled));
-            const firstBypassIdx = filters.findIndex((r) => /bypass fasttrack/i.test(r.comment || '') && !isTrue(r.disabled));
-            const firstFasttrackIdx = filters.findIndex((r) => r.action === 'fasttrack-connection' && !isTrue(r.disabled));
-            const ftOrderBad = fasttrackRules.length > 0 && (!bypassRules.length || (firstFasttrackIdx !== -1 && firstBypassIdx > firstFasttrackIdx));
-            factors.push({
-                level: ftOrderBad ? 'warn' : 'ok',
-                factor: 'FastTrack Connection و قوانین Bypass',
-                current: `FastTrack فعال: ${fasttrackRules.length} · Bypass: ${bypassRules.length}`,
-                analysis: ftOrderBad
-                    ? 'قانون FastTrack قبل از Bypass قرار دارد یا Bypass وجود ندارد؛ این مورد می‌تواند باعث دور زدن Mangle/Routing Mark شود.'
-                    : 'وضعیت FastTrack و قوانین Bypass برای حفظ Policy Routing مناسب است.',
-                actionHtml: ftOrderBad ? '<button type="button" class="warning compact" data-audit-fix="1">اصلاح ترتیب</button>' : '<span class="muted">سالم</span>'
-            });
-
-            const mvipsEntries = addrLists.filter((a) => a.list === 'MVIPs' && !isTrue(a.disabled));
-            const targetPeers = selectedPeer
-                ? wgPeers.filter((p) => p.interface === selectedPeer && !isTrue(p.disabled))
-                : wgPeers.filter((p) => String(p.interface || '').startsWith('mv-wg-') && !isTrue(p.disabled));
-            const endpointIps = Array.from(new Set(targetPeers.map((p) => ipOnly(endpointOf(p))).filter(isIpv4)));
-            const missingMvips = endpointIps.filter((ip) => !mvipsEntries.some((a) => sameIp(a.address, ip)));
-            factors.push({
-                level: missingMvips.length ? 'warn' : 'ok',
-                factor: 'لیست آی‌پی Endpointها در MVIPs',
-                current: `کل MVIPs: ${mvipsEntries.length} · Endpointهای بررسی‌شده: ${endpointIps.length}`,
-                analysis: missingMvips.length
-                    ? `آی‌پی Endpointهای زیر در لیست MVIPs نیستند: ${missingMvips.join(', ')}`
-                    : 'همه آی‌پی‌های Endpoint بررسی‌شده در لیست MVIPs قرار دارند.',
-                actionHtml: missingMvips.length ? '<button type="button" class="warning compact" data-audit-fix="1">افزودن به MVIPs</button>' : '<span class="muted">سالم</span>'
-            });
-
-            const peersToCheck = selectedPeer ? [selectedPeer] : wgInterfaces.slice(0, 8).map((w) => w.name);
-            peersToCheck.forEach((pName) => {
-                const pList = wgPeers.filter((p) => p.interface === pName && !isTrue(p.disabled));
-                const hs = handshakeInfo(pList);
-                const defRoute = routes.find((r) => (r['routing-table'] || '') === pName && normPrefix(r['dst-address']) === '0.0.0.0/0' && !isTrue(r.disabled));
-                const routeActive = defRoute && isTrue(defRoute.active);
-                const natOk = nats.some((n) => n.chain === 'srcnat' && n.action === 'masquerade' && n['out-interface'] === pName && !isTrue(n.disabled));
-                const badHs = !hs.ok;
-                const badRoute = !defRoute || !routeActive;
-                const badNat = !natOk;
-                const lvl = (badHs && badRoute) ? 'bad' : ((badHs || badRoute || badNat) ? 'warn' : 'ok');
-                factors.push({
-                    level: lvl,
-                    factor: `زنجیره کامل Peer: ${pName}`,
-                    current: `${hs.text} · Route: ${routeActive ? 'Active' : 'Inactive/Missing'} · NAT: ${natOk ? 'OK' : 'Missing'}`,
-                    analysis: badHs
-                        ? `هندشیک ${pName} برقرار یا تازه نیست (${hs.text}). اگر Endpoint با ICMP باز است اما UDP بسته است، پورت UDP مسیر دراپ می‌شود.`
-                        : (badRoute ? `مسیر پیش‌فرض (0.0.0.0/0) در جدول ${pName} فعال نیست.` : (!natOk ? `قانون Masquerade روی ${pName} یافت نشد.` : 'Handshake، Route و NAT این Peer در وضعیت مطلوب هستند.')),
-                    actionHtml: `<button type="button" class="info compact" data-audit-mtr="${esc(pName)}">🩺 MTR</button>`
-                });
-            });
-
-            // --- تحلیل Routing Rules ---
-            const lanRuleIdx = routingRules.findIndex((r) => normPrefix(r['dst-address']) === '192.168.0.0/16' && r.action === 'lookup' && isMainTable(r) && !isTrue(r.disabled));
-            routingRules.forEach((r, idx) => {
-                const dst = r['dst-address'] || '0.0.0.0/0';
-                const src = r['src-address'] || 'any';
-                const mark = r['routing-mark'] || '-';
-                const tbl = r.table || r['routing-table'] || 'main';
-                const disabled = isTrue(r.disabled);
-
-                let level = 'ok';
-                let note = 'قانون عادی و بدون تداخل آشکار';
-                if (disabled) {
-                    level = 'warn';
-                    note = 'این Routing Rule غیرفعال (Disabled) است';
-                } else if (normPrefix(dst) === '10.0.0.0/8') {
-                    level = 'bad';
-                    note = 'تداخل خطرناک با رنج 10.0.0.0/8 (ممکن است مسیرهای داخلی/CGNAT را منحرف کند)';
-                } else if (isInternalId(mark) || isInternalId(tbl)) {
-                    level = 'bad';
-                    note = 'اشاره به شناسه داخلی حذف‌شده (*ID) در Routing Table یا Mark';
-                } else if (selectedPeer && mark !== selectedPeer && tbl !== selectedPeer && !normPrefix(dst).startsWith('192.168.')) {
-                    level = 'ok';
-                    note = `مربوط به جدول/مارک ${tbl !== 'main' ? tbl : mark}`;
-                } else if (lanRuleIdx !== -1 && idx < lanRuleIdx && !isMainTable(r)) {
-                    level = 'warn';
-                    note = 'قبل از Rule شبکه محلی (192.168.0.0/16) قرار دارد';
-                } else if (tbl === selectedPeer || mark === selectedPeer) {
-                    const hasActiveDef = routes.some((rt) => (rt['routing-table'] || '') === selectedPeer && normPrefix(rt['dst-address']) === '0.0.0.0/0' && !isTrue(rt.disabled) && isTrue(rt.active));
-                    if (!hasActiveDef) {
-                        level = 'bad';
-                        note = `جدول ${selectedPeer} فاقد مسیر پیش‌فرض فعال (0.0.0.0/0) است`;
-                    } else {
-                        level = 'ok';
-                        note = `متصل به مسیر فعال جدول ${selectedPeer}`;
-                    }
-                }
-
-                auditedRules.push({
-                    index: idx + 1,
-                    category: 'Routing Rule',
-                    matchAction: `src=${src} · dst=${dst} · action=${r.action || 'lookup'}`,
-                    target: `mark=${mark} · table=${tbl}`,
-                    level,
-                    note,
-                    disabled,
-                    resourcePath: '/routing/rule',
-                    ruleId: r['.id'] || ''
-                });
-            });
-
-            // --- تحلیل Mangle Rules ---
-            const preroutingActive = mangles.filter((m) => m.chain === 'prerouting' && !isTrue(m.disabled));
-            const firstClientMangleIdx = preroutingActive.findIndex((m) => String(m['src-address-list'] || '').startsWith('mv-wg-'));
-            mangles.forEach((m, idx) => {
-                const chain = m.chain || '-';
-                const act = m.action || '-';
-                const srcList = m['src-address-list'] || '';
-                const dstList = m['dst-address-list'] || '';
-                const newMark = markOf(m);
-                const disabled = isTrue(m.disabled);
-                const pass = isTrue(m.passthrough);
-
-                let level = 'ok';
-                let note = `Bytes: ${formatBytes(m.bytes || 0)}`;
-                if (disabled) {
-                    level = 'warn';
-                    note = 'Mangle Rule غیرفعال (Disabled) است';
-                } else if (chain === 'prerouting' && newMark === 'mv2tr' && !srcList.startsWith('mv-wg-') && firstClientMangleIdx !== -1) {
-                    const myPreIdx = preroutingActive.indexOf(m);
-                    if (myPreIdx > firstClientMangleIdx) {
-                        level = 'warn';
-                        note = 'قانون mv2tr پایین‌تر از قوانین کلاینت‌های mv-wg قرار دارد (ممکن است مارک کلاینت را تحت تاثیر قرار دهد)';
-                    }
-                }
-                if (!disabled && act === 'mark-routing' && srcList.startsWith('mv-wg-') && pass) {
-                    level = 'warn';
-                    note += ' · passthrough=yes روی mark-routing کلاینت توصیه نمی‌شود';
-                }
-
-                const matchParts = [`chain=${chain}`, `action=${act}`];
-                if (m['src-address']) matchParts.push(`src=${m['src-address']}`);
-                if (m['dst-address']) matchParts.push(`dst=${m['dst-address']}`);
-                if (srcList) matchParts.push(`src-list=${srcList}`);
-                if (dstList) matchParts.push(`dst-list=${dstList}`);
-                if (m.protocol) matchParts.push(`proto=${m.protocol}`);
-                if (m['dst-port']) matchParts.push(`dport=${m['dst-port']}`);
-
-                auditedRules.push({
-                    index: idx + 1,
-                    category: 'Firewall Mangle',
-                    matchAction: matchParts.join(' · '),
-                    target: `mark=${newMark || '-'} · passthrough=${pass ? 'yes' : 'no'}`,
-                    level,
-                    note,
-                    disabled,
-                    resourcePath: '/ip/firewall/mangle',
-                    ruleId: m['.id'] || ''
-                });
-            });
-
-            // --- تحلیل NAT & Filter Rules تاثیرگذار ---
-            nats.forEach((n, idx) => {
-                const disabled = isTrue(n.disabled);
-                const outIf = n['out-interface'] || '-';
-                let level = disabled ? 'warn' : 'ok';
-                let note = `Bytes: ${formatBytes(n.bytes || 0)}${n.comment ? ' · ' + n.comment : ''}`;
-                if (!disabled && n.action === 'masquerade' && outIf.startsWith('mv-wg-')) {
-                    const ifaceObj = ifaces.find((i) => i.name === outIf);
-                    if (!ifaceObj || isTrue(ifaceObj.disabled) || !isTrue(ifaceObj.running)) {
-                        level = 'warn';
-                        note = `NAT روی اینترفیس غیرفعال/خاموش (${outIf})`;
-                    }
-                }
-                auditedRules.push({
-                    index: idx + 1,
-                    category: 'Firewall NAT',
-                    matchAction: `chain=${n.chain || '-'} · action=${n.action || '-'}`,
-                    target: `out-if=${outIf}`,
-                    level,
-                    note,
-                    disabled,
-                    resourcePath: '/ip/firewall/nat',
-                    ruleId: n['.id'] || ''
-                });
-            });
-
-            filters.forEach((f, idx) => {
-                const disabled = isTrue(f.disabled);
-                const isImportant = f.action === 'fasttrack-connection' || /bypass fasttrack/i.test(f.comment || '') || String(f['src-address-list'] || '').startsWith('mv-wg-');
-                if (!isImportant && !disabled) return;
-                auditedRules.push({
-                    index: idx + 1,
-                    category: 'Firewall Filter',
-                    matchAction: `chain=${f.chain || '-'} · action=${f.action || '-'}${f['src-address-list'] ? ' · src-list=' + f['src-address-list'] : ''}`,
-                    target: f.comment || '-',
-                    level: disabled && isImportant ? 'warn' : 'ok',
-                    note: `Bytes: ${formatBytes(f.bytes || 0)}`,
-                    disabled,
-                    resourcePath: '/ip/firewall/filter',
-                    ruleId: f['.id'] || ''
-                });
-            });
-
-            // فیلتر بر اساس Peer انتخاب‌شده یا فقط موارد دارای هشدار/خطا
-            const filteredFactors = factors.filter((item) => {
-                if (onlyIssues && item.level === 'ok') return false;
-                if (selectedPeer && item.factor.includes('mv-wg-') && !item.factor.includes(selectedPeer)) return false;
-                return true;
-            });
-
-            const filteredRules = auditedRules.filter((item) => {
-                if (onlyIssues && item.level === 'ok') return false;
-                if (selectedPeer) {
-                    const text = `${item.matchAction} ${item.target} ${item.note}`;
-                    const hasPeerRef = text.includes(selectedPeer);
-                    const isGlobalRule = item.category === 'Routing Rule' && (item.matchAction.includes('192.168.0.0/16') || item.matchAction.includes('10.0.0.0/8'));
-                    const isGlobalMangle = item.category === 'Firewall Mangle' && (item.target.includes('mv2tr') || item.matchAction.includes('MVIPs'));
-                    if (!hasPeerRef && !isGlobalRule && !isGlobalMangle) return false;
-                }
-                return true;
-            });
-
-            const badCount = filteredFactors.filter((x) => x.level === 'bad').length + filteredRules.filter((x) => x.level === 'bad').length;
-            const warnCount = filteredFactors.filter((x) => x.level === 'warn').length + filteredRules.filter((x) => x.level === 'warn').length;
-            const issueTotal = badCount + warnCount;
-
-            const badgeEl = document.getElementById('auditIssueCount');
-            if (badgeEl) badgeEl.textContent = String(issueTotal);
-            document.getElementById('kpiBad').textContent = String(badCount);
-            document.getElementById('kpiWarn').textContent = String(warnCount);
-            document.getElementById('kpiTotalRules').textContent = String(filteredRules.length);
-            const overallEl = document.getElementById('kpiOverall');
-            if (badCount > 0) {
-                overallEl.textContent = 'خطا دارد';
-                overallEl.style.color = '#f87171';
-            } else if (warnCount > 0) {
-                overallEl.textContent = 'هشدار دارد';
-                overallEl.style.color = '#fbbf24';
-            } else {
-                overallEl.textContent = 'سالم';
-                overallEl.style.color = '#34d399';
-            }
-
-            if (badCount === 0 && warnCount === 0) {
-                diagBox.innerHTML = `✅ <strong>هیچ مشکل یا تداخلی در Ruleها و عوامل تاثیرگذار یافت نشد.</strong> مسیرها، اولویت‌ها و وضعیت اینترفیس‌ها در وضعیت مطلوب هستند.`;
-            } else {
-                const topIssues = [
-                    ...filteredFactors.filter((x) => x.level !== 'ok').map((x) => `${x.factor}: ${x.analysis}`),
-                    ...filteredRules.filter((x) => x.level !== 'ok').slice(0, 4).map((x) => `${x.category} #${x.index}: ${x.note}`)
-                ];
-                diagBox.innerHTML = `⚠️ <strong>${badCount} خطا و ${warnCount} هشدار شناسایی شد:</strong><br>${topIssues.map((t) => `• ${esc(t)}`).join('<br>')}`;
-            }
-
-            document.getElementById('auditFactorsMeta').textContent = `${filteredFactors.length} عامل نمایش داده شد`;
-            if (!filteredFactors.length) {
-                factorsBody.innerHTML = '<tr><td colspan="5" class="empty">موردی با فیلتر فعلی پیدا نشد.</td></tr>';
-            } else {
-                factorsBody.innerHTML = filteredFactors.map((item) => {
-                    const cls = item.level === 'bad' ? 'row-bad' : (item.level === 'warn' ? 'row-warn' : 'row-ok');
-                    const bdg = item.level === 'bad'
-                        ? '<span class="badge badge-bad">خطا</span>'
-                        : (item.level === 'warn' ? '<span class="badge badge-warn">هشدار</span>' : '<span class="badge badge-ok">سالم</span>');
-                    return `<tr class="${cls}">
-                        <td>${bdg}</td>
-                        <td><strong>${esc(item.factor)}</strong></td>
-                        <td class="code-ltr">${esc(item.current)}</td>
-                        <td>${esc(item.analysis)}</td>
-                        <td>${item.actionHtml}</td>
-                    </tr>`;
-                }).join('');
-            }
-
-            document.getElementById('auditRulesMeta').textContent = `${filteredRules.length} Rule از مجموع ${auditedRules.length} Rule بررسی شد`;
-            if (!filteredRules.length) {
-                rulesBody.innerHTML = '<tr><td colspan="6" class="empty">Ruleی با فیلتر فعلی پیدا نشد.</td></tr>';
-            } else {
-                rulesBody.innerHTML = filteredRules.map((r) => {
-                    const cls = r.level === 'bad' ? 'row-bad' : (r.level === 'warn' ? 'row-warn' : 'row-ok');
-                    const bdg = r.level === 'bad'
-                        ? '<span class="badge badge-bad">تداخل / خطا</span>'
-                        : (r.level === 'warn' ? '<span class="badge badge-warn">هشدار</span>' : '<span class="badge badge-ok">سالم</span>');
-                    const toggleBtn = r.ruleId
-                        ? `<button type="button" class="ghost compact" data-rule-path="${esc(r.resourcePath)}" data-rule-id="${esc(r.ruleId)}" data-rule-disabled="${r.disabled ? '1' : '0'}">${r.disabled ? 'فعال' : 'غیرفعال'}</button>`
-                        : '<span class="muted">-</span>';
-                    return `<tr class="${cls}">
-                        <td dir="ltr">${r.index}</td>
-                        <td><strong>${esc(r.category)}</strong></td>
-                        <td class="code-ltr">${esc(r.matchAction)}</td>
-                        <td class="code-ltr">${esc(r.target)}</td>
-                        <td>${bdg} <span class="muted" style="margin-right:4px;">${esc(r.note)}</span></td>
-                        <td>${toggleBtn}</td>
-                    </tr>`;
-                }).join('');
-            }
-        } catch (err) {
-            diagBox.innerHTML = `❌ خطا در بررسی Ruleها: ${esc(err.message)}`;
-        } finally {
-            if (refreshBtn) refreshBtn.disabled = false;
-        }
-    }
-
-    document.getElementById('auditRefreshBtn').addEventListener('click', runRulesAndFactorsAudit);
-    document.getElementById('auditPeerFilter').addEventListener('change', runRulesAndFactorsAudit);
-    document.getElementById('auditOnlyIssues').addEventListener('change', runRulesAndFactorsAudit);
-    document.getElementById('auditAutoFixBtn').addEventListener('click', async () => {
-        if (!monitoring || busy) return;
-        setBusy(true);
-        try {
-            setStatus('در حال اصلاح خودکار Ruleها و عوامل تاثیرگذار...');
-            const health = await ensureRouterHealth();
-            const peer = document.getElementById('auditPeerFilter').value;
-            if (peer && peer.startsWith('mv-wg-')) {
-                await ensurePeerDataPath(peer);
-            }
-            setHeal(health.notes.concat(health.warnings).join(' · '), health.warnings.length > 0 || health.errors.length > 0);
-            await runRulesAndFactorsAudit();
-            setStatus('اصلاح خودکار Ruleها انجام شد.');
-        } catch (err) {
-            setStatus('خطا در اصلاح خودکار: ' + err.message, true);
-        } finally {
-            setBusy(false);
-        }
-    });
-    document.getElementById('tabRulesAudit').addEventListener('click', (event) => {
-        const fixBtn = event.target.closest('button[data-audit-fix]');
-        if (fixBtn) {
-            document.getElementById('auditAutoFixBtn').click();
-            return;
-        }
-        const mtrBtn = event.target.closest('button[data-audit-mtr]');
-        if (mtrBtn) {
-            openDiagnoseModal(mtrBtn.dataset.auditMtr);
-            return;
-        }
-        const ruleBtn = event.target.closest('button[data-rule-id]');
-        if (ruleBtn) {
-            toggleRuleDisabled(ruleBtn.dataset.rulePath, ruleBtn.dataset.ruleId, ruleBtn.dataset.ruleDisabled === '1');
-        }
-    });
 
     const resumeSession = loadSavedLogin();
     loadWiredPref();

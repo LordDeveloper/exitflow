@@ -53,7 +53,7 @@
             padding: 22px;
             line-height: 1.5;
         }
-        .container { max-width: 1320px; margin: 0 auto; }
+        .container { max-width: 1680px; margin: 0 auto; }
         .page-head {
             display: flex;
             justify-content: space-between;
@@ -660,11 +660,18 @@
         .relay-feedback, .relay-actions, .relay-pagination { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
         .relay-feedback { justify-content: space-between; color: var(--muted); font-size: 12px; }
         .relay-feedback span:empty { display: none; }
-        #relayCatalogRows { display: grid; grid-auto-rows: 1fr; grid-template-columns: minmax(0, 350px); gap: 12px; }
-        @media (min-width: 681px) { #relayCatalogRows { grid-template-columns: repeat(2, minmax(0, 350px)); } }
-        @media (min-width: 1280px) { #relayCatalogRows { grid-template-columns: repeat(4, minmax(0, 350px)); } }
+        #relayCatalogRows, .client-cards { display: grid; grid-auto-rows: 1fr; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+        @media (min-width: 768px) {
+            #relayCatalogRows, .client-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        }
+        @media (min-width: 1100px) {
+            #relayCatalogRows, .client-cards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        }
+        @media (min-width: 1440px) {
+            #relayCatalogRows, .client-cards { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+        }
         @media (min-width: 681px) and (max-width: 1000px) { .relay-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-        .relay-city { display: flex; flex-direction: column; width: 100%; max-width: 350px; border: 1px solid #3a3032; border-radius: 16px; padding: 12px; min-width: 0; background: #1a1416; position: relative; isolation: isolate; transition: border-color .15s ease, box-shadow .15s ease; }
+        .relay-city { display: flex; flex-direction: column; width: 100%; border: 1px solid #3a3032; border-radius: 16px; padding: 12px; min-width: 0; background: #1a1416; position: relative; isolation: isolate; transition: border-color .15s ease, box-shadow .15s ease; }
         .relay-city:has(.relay-edit:not([hidden]) .relay-country-picker[open]) { z-index: 6; }
         .relay-city::before { content: ''; position: absolute; z-index: -1; inset: 0 0 auto; height: 100px; border-radius: inherit; background: var(--relay-flag-image, none) center / cover; opacity: .2; filter: blur(8px); mask-image: linear-gradient(#000, transparent); pointer-events: none; }
         .relay-city[data-presence="on"] { border-color: #2f6b4f; background: #14261c; }
@@ -776,7 +783,6 @@
         .client-filters summary { cursor: pointer; font-weight: 700; }
         .client-filter-fields { display: grid; grid-template-columns: minmax(0, 2fr) 1fr 1fr auto; gap: 10px; align-items: end; margin-top: 10px; }
         .client-filter-fields > label:not(.switch) { display: grid; gap: 4px; color: var(--muted); font-size: 12px; }
-        .client-cards { display: grid; grid-auto-rows: 1fr; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: 12px; }
         .client-cards > .empty { grid-column: 1 / -1; }
         .client-card { display: flex; flex-direction: column; gap: 10px; padding: 13px; min-width: 0; background: #142032; border: 1px solid var(--border); border-radius: 12px; }
         .client-card.is-self { border-color: #317999; }

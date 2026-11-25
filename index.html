@@ -1018,7 +1018,7 @@
             <div class="dhcp-head">
                 <div>
                     <h2>تنظیمات DHCP</h2>
-                    <p>برای هر مودمی که CHR در مسیر پیش‌فرض می‌بیند یک DHCP ساخته می‌شود. کلاینت‌ها Gateway را برابر آدرس CHR می‌گیرند و اینترنتشان از مودمی خارج می‌شود که اینجا انتخاب می‌کنید. DHCP خود مودم باید خاموش باشد.</p>
+                    <p>آدرس دسترسی مودم را وارد کنید. همان آدرس روی هر اینترفیس پینگ می‌شود و اینترفیسی که جواب بدهد مودم است. بعد از آن کلاینت‌ها Gateway را برابر آدرس CHR می‌گیرند و DHCP خود مودم باید خاموش باشد.</p>
                 </div>
                 <div class="dhcp-tools">
                     <button type="button" id="chrDhcpRefresh">بروزرسانی</button>
@@ -1026,6 +1026,14 @@
                 </div>
             </div>
             <p class="dhcp-reset-note">اگر ویندوز به آیپی CHR نرسید، در ترمینال Winbox که با MAC وصل است این را اجرا کنید و بعد وای‌فای را قطع و وصل کنید: <code>/system script run exitflow-dhcp-reset</code></p>
+            <form id="chrModemDetectForm" class="dhcp-form">
+                <label>آدرس دسترسی مودم
+                    <input id="chrModemGateway" dir="ltr" placeholder="192.168.70.1" autocomplete="off" required>
+                </label>
+                <div class="dhcp-actions">
+                    <button type="submit" id="chrModemDetect">تشخیص مودم جدید</button>
+                </div>
+            </form>
             <p id="chrDhcpStatus" role="status"></p>
             <div id="chrDhcpServers" class="dhcp-servers"></div>
         </section>
@@ -3262,9 +3270,10 @@
         const refresh = document.getElementById('chrDhcpRefresh');
         const reset = document.getElementById('chrDhcpReset');
         const accessSave = document.getElementById('chrAccessSave');
+        const detect = document.getElementById('chrModemDetect');
         if (chrDhcpBusy) return;
         chrDhcpBusy = true;
-        refresh.disabled = reset.disabled = accessSave.disabled = true;
+        refresh.disabled = reset.disabled = accessSave.disabled = detect.disabled = true;
         const status = document.getElementById('chrDhcpStatus');
         const list = document.getElementById('chrDhcpServers');
         for (const button of list.querySelectorAll('button')) button.disabled = true;
@@ -3285,7 +3294,7 @@
         } finally {
             renderChrDhcp(chrDhcpState);
             renderChrAccess(chrDhcpState);
-            refresh.disabled = reset.disabled = accessSave.disabled = false;
+            refresh.disabled = reset.disabled = accessSave.disabled = detect.disabled = false;
             chrDhcpBusy = false;
         }
     }
@@ -4213,8 +4222,116 @@
         });
     });
 
+    function pingAnswered(result) {
+        return asList(result).some(row => {
+            const received = Number(row.received);
+            if (Number.isFinite(received) && received > 0) return true;
+            const status = String(row.status || '').toLowerCase();
+            if (status.includes('timeout') || status.includes('unreachable') || status.includes('error')) return false;
+            return Boolean(row.time) || status.includes('echo');
+        });
+    }
+
+    function addressOnInterface(rows, iface, cidr) {
+        return rows.find(row => {
+            if (row.interface !== iface || isTrue(row.disabled) || isTrue(row.invalid)) return false;
+            try { return chrCidr(row.address).subnet === cidr.subnet; }
+            catch { return false; }
+        });
+    }
+
+    function pickProbeAddress(cidr, gateway, occupied) {
+        for (let value = cidr.network + cidr.size - 2; value > cidr.network; value -= 1) {
+            const ip = chrFormatIp(value);
+            if (ip !== gateway && !occupied.has(ip)) return ip;
+        }
+        throw new Error('در ' + cidr.subnet + ' آدرس آزادی برای تست CHR پیدا نشد.');
+    }
+
+    async function addProbeAddress(iface, ip, prefix) {
+        const created = await apiFetch('/ip/address', 'PUT', {
+            address: ip + '/' + prefix, interface: iface, comment: 'Exitflow modem probe'
+        });
+        let id = asId(created);
+        if (!id || !/^\*[0-9A-Fa-f]+$/.test(String(id))) {
+            const rows = await apiList('/ip/address?.proplist=.id,address,interface,comment');
+            id = rows.find(row => row.interface === iface && row.comment === 'Exitflow modem probe' && ipOnly(row.address) === ip)?.['.id'] || null;
+        }
+        return id;
+    }
+
+    async function pingFromInterface(gateway, iface, src) {
+        const body = { address: gateway, interface: iface, count: '2' };
+        if (src) body['src-address'] = src;
+        try {
+            return pingAnswered(await apiFetch('/ping', 'POST', body, 8000));
+        } catch {
+            return false;
+        }
+    }
+
+    async function ensureDetectedModemRoute(gateway, iface) {
+        const routes = await apiList('/ip/route?.proplist=.id,dst-address,routing-table,disabled,gateway,immediate-gw,comment');
+        const gatewayOnIface = gateway + '%' + iface;
+        const existing = routes.find(row => normPrefix(row['dst-address']) === '0.0.0.0/0'
+            && (row['routing-table'] || 'main') === 'main'
+            && parseRouteGateway(row)?.gateway === gateway);
+        if (!existing) {
+            await apiFetch('/ip/route', 'PUT', {
+                'dst-address': '0.0.0.0/0', gateway: gatewayOnIface, comment: 'Internet via modem'
+            });
+            return;
+        }
+        const parsed = parseRouteGateway(existing);
+        if (isTrue(existing.disabled) || parsed?.iface !== iface) {
+            await apiFetch('/ip/route/' + assertId(existing['.id']), 'PATCH', { gateway: gatewayOnIface, disabled: 'no' });
+        }
+    }
+
+    async function detectNewModem(state, raw) {
+        const text = raw.includes('/') ? raw : raw + '/24';
+        const cidr = chrCidr(text);
+        const gateway = cidr.host;
+        const ifaces = [...state.eligible].sort();
+        if (!ifaces.length) throw new Error('اینترفیسی برای تست پیدا نشد.');
+        const status = document.getElementById('chrDhcpStatus');
+        const occupied = new Set(state.routerIps.filter(ip => cidr.contains(ip)));
+        const hits = [];
+        for (const iface of ifaces) {
+            status.textContent = 'پینگ ' + gateway + ' از ' + iface + '…';
+            let probeId = null;
+            let source = '';
+            const present = addressOnInterface(state.allAddresses, iface, cidr);
+            if (present) source = chrCidr(present.address).host;
+            else if (hits.length) continue;
+            else {
+                source = pickProbeAddress(cidr, gateway, occupied);
+                probeId = await addProbeAddress(iface, source, cidr.prefix);
+                occupied.add(source);
+            }
+            const answered = await pingFromInterface(gateway, iface, source);
+            if (answered) {
+                hits.push(iface);
+                if (probeId) {
+                    await apiFetch('/ip/address/' + assertId(probeId), 'PATCH', { comment: 'Exitflow DHCP gateway' });
+                }
+            } else if (probeId) {
+                await deleteById('/ip/address', probeId);
+                occupied.delete(source);
+            }
+        }
+        if (!hits.length) throw new Error(gateway + ' از هیچ اینترفیسی جواب نداد: ' + ifaces.join('، ') + '.');
+        if (hits.length > 1) throw new Error(gateway + ' از چند اینترفیس جواب داد: ' + hits.join('، ') + '.');
+        await ensureDetectedModemRoute(gateway, hits[0]);
+        return 'مودم ' + gateway + ' روی ' + hits[0] + ' تشخیص داده شد.';
+    }
+
     document.getElementById('chrDhcpRefresh').addEventListener('click', () => void runChrDhcpAction());
     document.getElementById('chrDhcpReset').addEventListener('click', () => void runChrDhcpAction(resetChrDhcpAccess));
+    document.getElementById('chrModemDetectForm').addEventListener('submit', event => {
+        event.preventDefault();
+        void runChrDhcpAction(state => detectNewModem(state, document.getElementById('chrModemGateway').value.trim()));
+    });
 
 
     function emptyClientCards() {

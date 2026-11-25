@@ -647,9 +647,15 @@
         .relay-city { display: flex; flex-direction: column; width: 100%; max-width: 350px; border: 1px solid #3a3032; border-radius: 16px; padding: 12px; min-width: 0; background: #1a1416; position: relative; isolation: isolate; transition: border-color .15s ease, box-shadow .15s ease; }
         .relay-city:has(.relay-edit:not([hidden]) .relay-country-picker[open]) { z-index: 6; }
         .relay-city::before { content: ''; position: absolute; z-index: -1; inset: 0 0 auto; height: 100px; border-radius: inherit; background: var(--relay-flag-image, none) center / cover; opacity: .2; filter: blur(8px); mask-image: linear-gradient(#000, transparent); pointer-events: none; }
-        .relay-city[data-installed="false"] { border-color: var(--border); background: #172130; color: #c6d1e4; }
-        .relay-city[data-installed="false"]::before { opacity: .12; filter: grayscale(.75) blur(8px); }
-        .relay-city[data-installed="false"] .relay-city-header { background: #202c3bca; }
+        .relay-city[data-presence="on"] { border-color: #2f6b4f; background: #14261c; }
+        .relay-city[data-presence="on"] .relay-city-header { background: #1c3a2b; }
+        .relay-city[data-presence="off"] { border-color: #8a3a42; background: #2a171b; }
+        .relay-city[data-presence="off"] .relay-city-header { background: #3d2226; }
+        .relay-city[data-presence="missing"] { border-color: #2c3644; background: #141b24; color: #8ea0b5; }
+        .relay-city[data-presence="missing"]::before { opacity: .12; filter: grayscale(.75) blur(8px); }
+        .relay-city[data-presence="missing"] .relay-city-header { background: #1c2430; }
+        .relay-city[data-presence="missing"] .relay-meta,
+        .relay-peer[data-presence="missing"] .relay-meta { color: #7d8da0; }
         .relay-edit .relay-country-picker { margin-bottom: 6px; }
         .relay-edit .relay-country-options { min-width: min(230px, 100%); }
         #relayCityFilter { min-width: 0; }
@@ -657,21 +663,27 @@
         .relay-flag { width: 26px; height: 17px; object-fit: contain; flex: 0 0 auto; }
         .relay-peer-title { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; overflow-wrap: anywhere; }
         .relay-state { border-radius: 20px; background: #263249; color: #c6d1e4; padding: 3px 8px; font-size: 12px; white-space: nowrap; }
-        .relay-state[data-state="on"] { background: #1e4432; color: #87ecb8; }
+        .relay-peer[data-presence="on"] .relay-state { background: #1e4432; color: #87ecb8; }
+        .relay-peer[data-presence="off"] .relay-state { background: #552633; color: #ffc6c9; }
+        .relay-peer[data-presence="missing"] .relay-state { background: #243041; color: #8ea0b5; }
         .relay-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
         .relay-metrics > div { display: grid; gap: 2px; place-content: center; text-align: center; min-height: 52px; padding: 7px 4px; border: 1px solid #2a2426; border-radius: 10px; background: #120e10; overflow-wrap: anywhere; }
+        .relay-metrics .relay-metric-wide { grid-column: 1 / -1; }
         .relay-metrics strong { font-size: 13px; }
         .relay-metrics span, .relay-metrics small { color: #b4c5c3; font-size: 11px; }
-        .relay-metrics .relay-rx { color: #94e8ff; background: #173438; border-color: #2e6674; }
-        .relay-metrics .relay-tx { color: #9cf0c4; background: #17362b; border-color: #30705a; }
+        .relay-traffic { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; padding: 8px 10px; border: 1px solid #2a2426; border-radius: 10px; background: #120e10; }
+        .relay-traffic > span { display: inline-flex; align-items: baseline; gap: 4px; min-width: 0; font-size: 12px; }
+        .relay-traffic strong { font-size: 13px; font-variant-numeric: tabular-nums; }
+        .relay-traffic small:empty { display: none; }
+        .relay-rx { color: #94e8ff; }
+        .relay-tx { color: #9cf0c4; }
         .relay-city h3 { margin: 0; font-size: 15px; }
         .relay-peer { display: flex; flex-direction: column; gap: 8px; padding: 8px 0; }
         .relay-city > .relay-peer { flex: 1; }
         .relay-peer > footer { margin-top: auto; }
-        .relay-city:has(> .relay-peer[data-health="problem"]) { border-color: #b34b54; background: #321d25; }
-        .relay-city:has(> .relay-peer[data-health="problem"]) .relay-city-header { background: #41232c; }
-        .relay-peer[data-health="problem"] .relay-state { background: #552633; color: #ffc6c9; }
-        .relay-peer[data-health="checking"] .relay-state { background: #463b27; color: #ffe0a1; }
+        .relay-peer[data-presence="on"] { color: #e7f6ee; }
+        .relay-peer[data-presence="off"] { color: #ffd7db; }
+        .relay-peer[data-presence="missing"] { color: #8ea0b5; }
         .relay-peer + .relay-peer { border-top: 1px solid var(--border); }
         .relay-meta { color: var(--muted); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
         .relay-meta:empty { display: none; }
@@ -6618,11 +6630,12 @@
                 header.append(flag);
                 card.style.setProperty('--relay-flag-image', `url("${flag.getAttribute('src')}")`);
             }
-            card.dataset.installed = String(city.installed.length > 0);
-            header.append(heading);
-            card.append(header);
             const [installed, ...extra] = hideDisabled
                 ? city.installed.filter(iface => !isTrue(iface.disabled)) : city.installed;
+            card.dataset.installed = String(city.installed.length > 0);
+            card.dataset.presence = !installed ? 'missing' : isTrue(installed.disabled) ? 'off' : 'on';
+            header.append(heading);
+            card.append(header);
             card.append(buildCityPeer(city.relays, installed));
             bindRelaySelection(card, installed, 'details');
             if (extra.length) {
@@ -6652,6 +6665,7 @@
             && relay.publicKey === peer?.['public-key']);
         const choices = relays.filter(relay => relay.ip && relay.active !== false);
         const disabled = iface && isTrue(iface.disabled);
+        card.dataset.presence = !iface ? 'missing' : disabled ? 'off' : 'on';
         const title = document.createElement('strong');
         title.textContent = iface ? (current?.name || iface.name) : (choices[0]?.name || 'رلهٔ فعال موجود نیست');
         title.dir = iface || choices.length ? 'ltr' : 'rtl';
@@ -6679,10 +6693,13 @@
             stats.innerHTML = `
                 <div><span>Handshake</span><strong data-metric="health">—</strong></div>
                 <div><strong data-metric="clients">—</strong><span>کلاینت‌ها</span></div>
-                <div><strong data-metric="latency">—</strong><span>آخرین پینگ</span></div>
-                <div class="relay-rx"><strong data-metric="rxSpeed">—</strong><span>↓ دریافت</span><small data-metric="rx"></small></div>
-                <div class="relay-tx"><strong data-metric="txSpeed">—</strong><span>↑ ارسال</span><small data-metric="tx"></small></div>`;
-            card.append(stats);
+                <div class="relay-metric-wide"><strong data-metric="latency">—</strong><span>آخرین پینگ</span></div>`;
+            const traffic = document.createElement('div');
+            traffic.className = 'relay-traffic';
+            traffic.innerHTML = `
+                <span class="relay-rx"><span>↓ دریافت</span><strong data-metric="rxSpeed">—</strong><small data-metric="rx"></small></span>
+                <span class="relay-tx"><span>↑ ارسال</span><strong data-metric="txSpeed">—</strong><small data-metric="tx"></small></span>`;
+            card.append(stats, traffic);
             actions.append(
                 relayIcon(disabled ? 'فعال' : 'غیرفعال', 'power', 'info', () => mutateRelay(async () => {
                     await setPeerDisabledState(iface.name, !disabled);
@@ -6780,7 +6797,6 @@
             const badge = card.querySelector('[data-relay-state]');
             if (state) {
                 card.dataset.health = state.state;
-                badge.dataset.state = state.state === 'ok' ? 'on' : 'off';
                 setText(badge, state.text);
             }
             const metrics = {

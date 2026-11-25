@@ -2936,8 +2936,7 @@
         const previousAvg = previous?.avg;
         peerTests.set(name, { state: 'running', target, endpoint, avg: previousAvg, checkedAt: previous?.checkedAt, text: endpoint ? '' : `در حال فرستادن ${countNum} بسته به ${target}…` });
         paintPeerTest(name);
-        const routed = { address: target, count: String(countNum) };
-        if (!endpoint) routed.interface = name;
+        const routed = { address: target, count: String(countNum), interface: name };
         if (srcAddress) routed['src-address'] = srcAddress;
         try {
             const result = await apiFetch('/ping', 'POST', routed, 25000);
@@ -6704,7 +6703,15 @@
             || (a.iface?.name || '').localeCompare(b.iface?.name || '', 'en');
     }
 
-    function markRelayExtract(cards) {
+    function cityHostIface(city, installed) {
+        for (const relay of city.relays) {
+            const iface = installed.find(item => item.name === 'mv-wg-' + relay.name || item.name === relay.name);
+            if (iface) return iface;
+        }
+        return installed[0] || null;
+    }
+
+    function markRelayHostActions(cards) {
         const groups = new Map();
         for (const card of cards) {
             const key = card.city.key;
@@ -6713,17 +6720,19 @@
         }
         for (const group of groups.values()) {
             const city = group[0].city;
-            const active = city.relays.filter(relay => relay.ip && relay.active !== false);
             const free = city.relays.filter(relayIsFree);
-            for (const card of group) card.extract = false;
-            if (!installedRelays || !free.length || active.length < 2) continue;
-            const hostName = city.relays
-                .map(relay => city.installed.find(iface => iface.name === 'mv-wg-' + relay.name || iface.name === relay.name)?.name)
-                .find(name => name && group.some(card => card.iface?.name === name));
-            const host = hostName
-                ? group.find(card => card.iface?.name === hostName)
-                : group.find(card => !card.iface) || group[0];
-            if (host) host.extract = true;
+            for (const card of group) {
+                card.extract = false;
+                card.installMore = false;
+            }
+            if (!installedRelays || !free.length) continue;
+            const hostName = cityHostIface(city, city.installed)?.name;
+            const host = (hostName && group.find(card => card.iface?.name === hostName))
+                || group.find(card => !card.iface)
+                || group[0];
+            if (!host) continue;
+            if (host.iface) host.installMore = true;
+            if (free.length > 1) host.extract = true;
         }
     }
 
@@ -6801,13 +6810,19 @@
             const installed = hideDisabled
                 ? city.installed.filter(iface => !isTrue(iface.disabled)) : city.installed;
             const free = city.relays.filter(relayIsFree);
-            if (filter !== 'available') {
-                for (const iface of installed) viewCards.push({ city, iface, free });
+            if (filter === 'available') {
+                if (!free.length) continue;
+                const host = cityHostIface(city, installed);
+                viewCards.push({ city, iface: host, free });
+                continue;
             }
-            if (filter !== 'installed' && free.length) viewCards.push({ city, iface: null, free });
+            for (const iface of installed) viewCards.push({ city, iface, free });
+            if (!installed.length && filter !== 'installed' && free.length) {
+                viewCards.push({ city, iface: null, free });
+            }
         }
         viewCards.sort(compareRelayCards);
-        markRelayExtract(viewCards);
+        markRelayHostActions(viewCards);
         const pages = Math.max(1, Math.ceil(viewCards.length / relayPageSize));
         relayPage = Math.min(relayPage, pages - 1);
         document.getElementById('relayPageCount').textContent = viewCards.length
@@ -6851,8 +6866,29 @@
             const peer = buildCityPeer(city.city.relays, city.iface);
             card.append(peer);
             bindRelaySelection(card, city.iface, 'details');
+            const actions = peer.querySelector('.relay-actions');
+            if (city.installMore && city.iface) {
+                const free = city.city.relays.filter(relayIsFree);
+                actions.append(relayIcon('نصب رلهٔ آزاد', 'install', 'success', () => {
+                    if (!free.length) return undefined;
+                    if (free.length === 1) return mutateRelay(() => installCatalogRelay(free[0].name));
+                    openRelayChangeModal({
+                        title: 'نصب رله',
+                        hint: 'رلهٔ آزاد به عنوان نود جدید نصب می‌شود',
+                        current: free[0].name,
+                        options: free.map(relay => ({
+                            value: relay.name,
+                            text: [relay.city, relay.name, relay.ip].filter(Boolean).join(' · ')
+                        })),
+                        onApply: value => {
+                            if (!value) return undefined;
+                            return mutateRelay(() => installCatalogRelay(value));
+                        }
+                    });
+                }, relayBusy, 'install:' + city.city.key));
+            }
             if (city.extract) {
-                peer.querySelector('.relay-actions').append(relayIcon('استخراج شهر', 'extract', 'success', () => {
+                actions.append(relayIcon('استخراج شهر', 'extract', 'success', () => {
                     const pending = city.city.relays.filter(relayIsFree);
                     if (!pending.length) return undefined;
                     if (!window.confirm(`${pending.length} رلهٔ این شهر هر کدام به صورت یک نود جدا نصب شوند؟`)) return undefined;

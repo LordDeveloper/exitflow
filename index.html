@@ -1018,7 +1018,7 @@
             <div class="dhcp-head">
                 <div>
                     <h2>تنظیمات DHCP</h2>
-                    <p>آدرس دسترسی مودم را وارد کنید. همان آدرس روی هر اینترفیس پینگ می‌شود و اینترفیسی که جواب بدهد مودم است. بعد از آن کلاینت‌ها Gateway را برابر آدرس CHR می‌گیرند و DHCP خود مودم باید خاموش باشد.</p>
+                    <p>آدرس دسترسی مودم را وارد کنید. همان آدرس روی هر اینترفیس پینگ می‌شود و روی اینترفیسی که جواب بدهد DHCP ساخته و روشن می‌شود. کلاینت‌ها Gateway را برابر آدرس CHR می‌گیرند و DHCP خود مودم باید خاموش باشد.</p>
                 </div>
                 <div class="dhcp-tools">
                     <button type="button" id="chrDhcpRefresh">بروزرسانی</button>
@@ -4323,7 +4323,40 @@
         if (!hits.length) throw new Error(gateway + ' از هیچ اینترفیسی جواب نداد: ' + ifaces.join('، ') + '.');
         if (hits.length > 1) throw new Error(gateway + ' از چند اینترفیس جواب داد: ' + hits.join('، ') + '.');
         await ensureDetectedModemRoute(gateway, hits[0]);
-        return 'مودم ' + gateway + ' روی ' + hits[0] + ' تشخیص داده شد.';
+        status.textContent = 'مودم روی ' + hits[0] + ' است. در حال ساخت DHCP…';
+        const dhcp = await createDetectedModemDhcp(gateway, hits[0]);
+        return 'مودم ' + gateway + ' روی ' + hits[0] + ' تشخیص داده شد. ' + dhcp;
+    }
+
+    function modemFromDetection(state, gateway, iface) {
+        const found = discoverModems(state).find(item => item.gateway === gateway && item.iface === iface);
+        if (found) return found;
+        const row = state.allAddresses.find(item => {
+            if (item.interface !== iface || isTrue(item.disabled) || isTrue(item.invalid) || isTrue(item.dynamic)) return false;
+            try {
+                const cidr = chrCidr(item.address);
+                return cidr.contains(gateway) && cidr.host !== gateway;
+            } catch { return false; }
+        });
+        if (!row) throw new Error('روی ' + iface + ' آدرس CHR در ساب‌نت ' + gateway + ' نیست.');
+        const cidr = chrCidr(row.address);
+        return { gateway, iface, chrAddress: cidr.host, prefix: cidr.prefix, subnet: cidr.subnet, cidr, seen: true };
+    }
+
+    async function createDetectedModemDhcp(gateway, iface) {
+        const state = await readChrDhcp();
+        const modem = modemFromDetection(state, gateway, iface);
+        const keeper = serverForModem(state, modem);
+        for (const server of state.servers) {
+            if (!server['.id'] || server.interface !== iface) continue;
+            if (keeper && server['.id'] === keeper['.id']) continue;
+            await retireServer(server, state, [modem.cidr]);
+        }
+        await restoreModemAccess(state, modem);
+        const fresh = await readChrDhcp();
+        const current = modemFromDetection(fresh, gateway, iface);
+        await ensureModemInternet(current.subnet, current);
+        return 'DHCP روشن شد. کلاینت‌ها از ' + current.subnet + ' آدرس می‌گیرند و Gateway آن‌ها ' + current.chrAddress + ' است.';
     }
 
     document.getElementById('chrDhcpRefresh').addEventListener('click', () => void runChrDhcpAction());

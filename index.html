@@ -209,7 +209,7 @@
             background: #2a332f;
             color: #e7f4ee;
             border: 1px solid #3d4f48;
-            border-radius: 999px;
+            border-radius: 10px;
             cursor: pointer;
             font-weight: 600;
             box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
@@ -687,14 +687,17 @@
         .relay-peer[data-presence="off"] .relay-state { background: #552633; color: #ffc6c9; }
         .relay-peer[data-presence="missing"] .relay-state { background: #243041; color: #8ea0b5; }
         .relay-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-        .relay-metrics > div { display: grid; gap: 2px; place-content: center; text-align: center; min-height: 52px; padding: 7px 4px; border: 1px solid #2a2426; border-radius: 10px; background: #120e10; overflow-wrap: anywhere; }
+        .relay-peer-title strong { font-size: 13px; font-weight: 700; }
+        .relay-metrics > div { display: grid; gap: 2px; place-content: center; text-align: center; min-height: 48px; padding: 6px 4px; border: 1px solid #2a2426; border-radius: 10px; background: #120e10; overflow-wrap: anywhere; }
         .relay-metrics .relay-metric-wide { grid-column: 1 / -1; }
-        .relay-metrics strong { font-size: 13px; }
-        .relay-metrics span, .relay-metrics small { color: #b4c5c3; font-size: 11px; }
-        .relay-traffic { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; padding: 8px 10px; border: 1px solid #2a2426; border-radius: 10px; background: #120e10; }
-        .relay-traffic > span { display: inline-flex; align-items: baseline; gap: 4px; min-width: 0; font-size: 12px; }
-        .relay-traffic strong, .relay-traffic small { direction: ltr; unicode-bidi: isolate; font-size: 13px; font-variant-numeric: tabular-nums; }
-        .relay-traffic > span > span { unicode-bidi: isolate; }
+        .relay-metrics strong { font-size: 13px; font-weight: 700; line-height: 1.3; }
+        .relay-metrics span { color: #b4c5c3; font-size: 11px; line-height: 1.3; }
+        .relay-traffic { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+        .relay-traffic > div { display: grid; justify-items: center; align-content: center; gap: 1px; min-width: 0; min-height: 52px; padding: 6px 4px; border: 1px solid #2a2426; border-radius: 10px; background: #120e10; text-align: center; }
+        .relay-traffic span { color: #b4c5c3; font-size: 11px; line-height: 1.3; }
+        .relay-traffic strong, .relay-traffic small { direction: ltr; unicode-bidi: isolate; white-space: nowrap; font-variant-numeric: tabular-nums; line-height: 1.3; }
+        .relay-traffic strong { font-size: 13px; font-weight: 700; }
+        .relay-traffic small { font-size: 11px; opacity: 0.85; }
         .relay-traffic small:empty { display: none; }
         .relay-rx { color: #94e8ff; }
         .relay-tx { color: #9cf0c4; }
@@ -714,8 +717,8 @@
         .relay-actions { border-top: 1px solid var(--border); padding-top: 10px; }
         .relay-actions:empty { display: none; }
         .relay-actions .relay-icon {
-            display: inline-grid; place-items: center; width: 38px; height: 38px; padding: 0;
-            border-radius: 50%; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+            display: inline-grid; place-items: center; width: 34px; height: 34px; padding: 0;
+            border-radius: 10px; box-shadow: none;
         }
         .relay-actions .relay-icon:hover { transform: translateY(-1px); }
         .relay-icon[data-icon="power"] { background: #3a3224; color: #ffe7c2; border-color: #6a5530; }
@@ -6733,8 +6736,8 @@
             const traffic = document.createElement('div');
             traffic.className = 'relay-traffic';
             traffic.innerHTML = `
-                <span class="relay-rx"><span>↓ دریافت</span><strong data-metric="rxSpeed">—</strong><small data-metric="rx"></small></span>
-                <span class="relay-tx"><span>↑ ارسال</span><strong data-metric="txSpeed">—</strong><small data-metric="tx"></small></span>`;
+                <div class="relay-rx"><span>↓ دریافت</span><strong data-metric="rxSpeed" dir="ltr">—</strong><small data-metric="rx" dir="ltr"></small></div>
+                <div class="relay-tx"><span>↑ ارسال</span><strong data-metric="txSpeed" dir="ltr">—</strong><small data-metric="tx" dir="ltr"></small></div>`;
             card.append(stats, traffic);
             actions.append(
                 relayIcon(disabled ? 'فعال' : 'غیرفعال', 'power', 'info', () => mutateRelay(async () => {

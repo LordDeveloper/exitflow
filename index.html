@@ -644,7 +644,7 @@
         @media (min-width: 681px) { #relayCatalogRows { grid-template-columns: repeat(2, minmax(0, 350px)); } }
         @media (min-width: 1280px) { #relayCatalogRows { grid-template-columns: repeat(4, minmax(0, 350px)); } }
         @media (min-width: 681px) and (max-width: 1000px) { .relay-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-        .relay-city { display: flex; flex-direction: column; width: 100%; max-width: 350px; border: 1px solid #2b5549; border-radius: 13px; padding: 13px; min-width: 0; background: #14251f; position: relative; isolation: isolate; }
+        .relay-city { display: flex; flex-direction: column; width: 100%; max-width: 350px; border: 1px solid #3a3032; border-radius: 16px; padding: 12px; min-width: 0; background: #1a1416; position: relative; isolation: isolate; transition: border-color .15s ease, box-shadow .15s ease; }
         .relay-city:has(.relay-edit:not([hidden]) .relay-country-picker[open]) { z-index: 6; }
         .relay-city::before { content: ''; position: absolute; z-index: -1; inset: 0 0 auto; height: 100px; border-radius: inherit; background: var(--relay-flag-image, none) center / cover; opacity: .2; filter: blur(8px); mask-image: linear-gradient(#000, transparent); pointer-events: none; }
         .relay-city[data-installed="false"] { border-color: var(--border); background: #172130; color: #c6d1e4; }
@@ -653,16 +653,15 @@
         .relay-edit .relay-country-picker { margin-bottom: 6px; }
         .relay-edit .relay-country-options { min-width: min(230px, 100%); }
         #relayCityFilter { min-width: 0; }
-        .relay-city-header { display: flex; align-items: center; gap: 8px; border-radius: 8px; padding: 7px 9px; background: linear-gradient(120deg, #213a2d, #15222b); }
+        .relay-city-header { display: flex; align-items: center; gap: 8px; border-radius: 10px; padding: 7px 9px; background: #241c1e; }
         .relay-flag { width: 26px; height: 17px; object-fit: contain; flex: 0 0 auto; }
         .relay-peer-title { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; overflow-wrap: anywhere; }
         .relay-state { border-radius: 20px; background: #263249; color: #c6d1e4; padding: 3px 8px; font-size: 12px; white-space: nowrap; }
         .relay-state[data-state="on"] { background: #1e4432; color: #87ecb8; }
-        .relay-metrics { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; }
-        .relay-metrics > div { grid-column: span 2; display: grid; gap: 2px; place-content: center; text-align: center; padding: 7px 4px; border: 1px solid #30413d; border-radius: 8px; background: #172322; overflow-wrap: anywhere; }
+        .relay-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+        .relay-metrics > div { display: grid; gap: 2px; place-content: center; text-align: center; min-height: 52px; padding: 7px 4px; border: 1px solid #2a2426; border-radius: 10px; background: #120e10; overflow-wrap: anywhere; }
         .relay-metrics strong { font-size: 13px; }
         .relay-metrics span, .relay-metrics small { color: #b4c5c3; font-size: 11px; }
-        .relay-metrics .relay-rx, .relay-metrics .relay-tx { grid-column: span 3; }
         .relay-metrics .relay-rx { color: #94e8ff; background: #173438; border-color: #2e6674; }
         .relay-metrics .relay-tx { color: #9cf0c4; background: #17362b; border-color: #30705a; }
         .relay-city h3 { margin: 0; font-size: 15px; }
@@ -683,10 +682,31 @@
         .relay-actions:empty { display: none; }
         .relay-actions .relay-icon { display: inline-grid; place-items: center; width: 34px; height: 34px; padding: 0; }
         .relay-icon svg { width: 17px; height: 17px; }
-        #relayBulkActions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-block: 8px; }
-        #relayBulkActions[hidden], .relay-select[hidden] { display: none; }
-        .relay-peer[data-selected="true"] { outline: 2px solid #60a5fa; outline-offset: -2px; }
-        .relay-select { display: inline-flex; align-items: center; gap: 6px; width: fit-content; cursor: pointer; }
+        .relay-board-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+        .relay-board-head p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+        .relay-board-count { padding: 4px 10px; border-radius: 999px; background: #241c1e; color: #f3e8ea; font-size: 12px; font-weight: 700; white-space: nowrap; }
+        .relay-select-bar {
+            position: sticky; top: 8px; z-index: 20;
+            display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+            padding: 10px 12px; border-radius: 12px;
+            background: #4a2228; border: 1px solid #7a3038;
+            box-shadow: 0 10px 24px #00000055;
+        }
+        .relay-select-bar[hidden] { display: none; }
+        .relay-select-bar-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+        .relay-select-bar button { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; }
+        .relay-select-delete { background: #e11d48; }
+        .relay-select-ghost, .relay-select-cancel {
+            background: transparent; border: 1px solid #ffffff2e; color: #f8e8ea;
+        }
+        .relay-select-bar strong { font-size: 13px; }
+        .relay-management.is-selecting .relay-city[data-selectable="true"],
+        .relay-management.is-selecting .relay-peer[data-selectable="true"] { cursor: pointer; user-select: none; }
+        .relay-peer[data-selected="true"] { border-radius: 10px; box-shadow: inset 0 0 0 2px #f3efe9; }
+        .relay-city:has(> .relay-peer[data-selected="true"]) {
+            border-color: #f3efe9;
+            box-shadow: 0 0 0 1px #f3efe9, 0 14px 28px #00000066;
+        }
         .relay-icon[aria-busy="true"] { cursor: wait; opacity: 1; }
         .relay-icon[aria-busy="true"] svg { display: none; }
         .relay-icon[aria-busy="true"]::after {
@@ -877,7 +897,13 @@
 
     <div id="tabWireguard" class="tab-panel" role="tabpanel" hidden>
         <section class="card relay-management" id="relayManagement">
-            <h2>Peerهای WireGuard</h2>
+            <div class="relay-board-head">
+                <div>
+                    <h2>لیست پیرها</h2>
+                    <p>برای انتخاب چندتایی، روی یک پیر دوبار کلیک کنید.</p>
+                </div>
+                <span id="relayBoardCount" class="relay-board-count">۰ پیر</span>
+            </div>
             <div class="relay-body">
                 <section class="relay-settings-panel" aria-label="تنظیمات WireGuard">
                     <h3>تنظیمات WireGuard</h3>
@@ -915,18 +941,15 @@
                     </select>
                     <button type="button" id="relayRouterSync">تازه‌سازی وضعیت روتر</button>
                     <button type="button" id="peerResetBtn" class="danger">ریست پیرها</button>
-                    <button type="button" id="relaySelectBtn" aria-pressed="false">انتخاب چندتایی</button>
                 </div>
-                <div id="relayBulkActions" hidden>
-                    <label for="relayBulkOperation">عملیات انتخاب‌شده‌ها</label>
-                    <select id="relayBulkOperation">
-                        <option value="">انتخاب عملیات</option>
-                        <option value="enable">فعال‌کردن انتخاب‌شده‌ها</option>
-                        <option value="disable">غیرفعال‌کردن انتخاب‌شده‌ها</option>
-                        <option value="delete">حذف انتخاب‌شده‌ها</option>
-                    </select>
-                    <button type="button" id="relayBulkApply">اجرا</button>
-                    <span id="relayBulkCount" role="status"></span>
+                <div id="relayBulkActions" class="relay-select-bar" hidden>
+                    <div class="relay-select-bar-actions">
+                        <button type="button" id="relayBulkDelete" class="danger relay-select-delete">حذف انتخاب‌شده‌ها</button>
+                        <button type="button" id="relayBulkDisable" class="relay-select-ghost">غیرفعال‌کردن</button>
+                        <button type="button" id="relayBulkEnable" class="relay-select-ghost">فعال‌کردن</button>
+                        <button type="button" id="relayBulkCancel" class="relay-select-cancel">× انصراف</button>
+                    </div>
+                    <strong id="relayBulkCount" role="status"></strong>
                 </div>
                 <div class="relay-feedback">
                     <label class="switch" for="hideDisabledRelays">
@@ -5687,11 +5710,13 @@
         if (!event.target.closest('.peer-picker')) closeAllPickers();
     });
     document.addEventListener('keydown', (event) => {
-        if (event.key === 'Escape') {
-            closeAllPickers();
-            closeDiagnoseModal();
-            closeClientPingModal();
-        }
+        if (event.key !== 'Escape') return;
+        const pickerOpen = Boolean(document.querySelector('.peer-picker[data-open], #relayCountryPicker[open]'));
+        const modalOpen = Boolean(document.querySelector('dialog[open], #diagModal:not([hidden]), #clientPingModal:not([hidden])'));
+        closeAllPickers();
+        closeDiagnoseModal();
+        closeClientPingModal();
+        if (!pickerOpen && !modalOpen && relaySelectionMode) cancelRelaySelection();
     });
     document.getElementById('openDiagFromTabBtn').addEventListener('click', () => openDiagnoseModal(''));
     document.getElementById('diagCloseBtn').addEventListener('click', closeDiagnoseModal);
@@ -6166,45 +6191,67 @@
     let installedRelays = null;
     let relayBusy = false;
     let relaySelectionMode = false;
+    let relaySelectClickTimer = 0;
     const selectedRelayNodes = new Map();
 
     function paintRelaySelection() {
+        if (!selectedRelayNodes.size) relaySelectionMode = false;
         const count = selectedRelayNodes.size;
-        document.getElementById('relaySelectBtn').setAttribute('aria-pressed', String(relaySelectionMode));
-        document.getElementById('relaySelectBtn').disabled = !monitoring || relayBusy;
         document.getElementById('relayBulkActions').hidden = !relaySelectionMode;
         document.getElementById('relayBulkCount').textContent = count + ' پیر انتخاب شده';
-        const operation = document.getElementById('relayBulkOperation');
-        operation.disabled = !count || relayBusy;
-        document.getElementById('relayBulkApply').disabled = !count || !operation.value || relayBusy;
+        for (const id of ['relayBulkDelete', 'relayBulkEnable', 'relayBulkDisable']) {
+            document.getElementById(id).disabled = !count || relayBusy;
+        }
+        document.getElementById('relayBulkCancel').disabled = relayBusy;
+        relayManagement.classList.toggle('is-selecting', relaySelectionMode);
         for (const card of relayManagement.querySelectorAll('[data-relay-interface]')) {
-            const checkbox = card.querySelector('.relay-select input');
-            if (!checkbox) continue;
-            checkbox.parentElement.hidden = !relaySelectionMode;
-            checkbox.disabled = relayBusy;
-            checkbox.checked = selectedRelayNodes.has(card.dataset.relayInterface);
-            card.dataset.selected = String(checkbox.checked);
+            const selected = selectedRelayNodes.has(card.dataset.relayInterface);
+            card.dataset.selected = String(selected);
+            card.setAttribute('aria-selected', String(selected));
         }
     }
 
     function toggleRelaySelection(iface) {
-        if (!monitoring || relayBusy || !iface['.id']) return;
-        relaySelectionMode = true;
+        if (!monitoring || relayBusy || !iface?.['.id'] || !String(iface.name || '').startsWith('mv-wg-')) return;
         if (selectedRelayNodes.has(iface.name)) selectedRelayNodes.delete(iface.name);
         else selectedRelayNodes.set(iface.name, iface['.id']);
+        relaySelectionMode = selectedRelayNodes.size > 0;
         paintRelaySelection();
     }
 
-    document.getElementById('relaySelectBtn').addEventListener('click', () => {
-        relaySelectionMode = !relaySelectionMode;
-        if (!relaySelectionMode) selectedRelayNodes.clear();
+    function cancelRelaySelection() {
+        window.clearTimeout(relaySelectClickTimer);
+        relaySelectionMode = false;
+        selectedRelayNodes.clear();
         paintRelaySelection();
-    });
-    document.getElementById('relayBulkOperation').addEventListener('change', paintRelaySelection);
-    document.getElementById('relayBulkApply').addEventListener('click', () => {
+    }
+
+    function bindRelaySelection(target, iface, ignoreSelector) {
+        if (!iface?.name?.startsWith('mv-wg-') || !iface['.id']) return;
+        target.dataset.selectable = 'true';
+        const onBody = event => {
+            if (ignoreSelector && event.target.closest(ignoreSelector)) return false;
+            return !event.target.closest('button, a, input, select, summary, .relay-edit, .relay-country-picker');
+        };
+        target.addEventListener('mousedown', event => {
+            if (event.detail > 1) event.preventDefault();
+        });
+        target.addEventListener('click', event => {
+            if (!onBody(event) || event.detail !== 1) return;
+            window.clearTimeout(relaySelectClickTimer);
+            if (!relaySelectionMode) return;
+            relaySelectClickTimer = window.setTimeout(() => toggleRelaySelection(iface), 220);
+        });
+        target.addEventListener('dblclick', event => {
+            if (!onBody(event)) return;
+            event.preventDefault();
+            window.clearTimeout(relaySelectClickTimer);
+            toggleRelaySelection(iface);
+        });
+    }
+
+    function applyRelayBulk(operation) {
         if (!monitoring || relayBusy || !selectedRelayNodes.size) return;
-        const select = document.getElementById('relayBulkOperation');
-        const operation = select.value;
         if (!['enable', 'disable', 'delete'].includes(operation)) return;
         if (operation === 'delete' && !window.confirm(`${selectedRelayNodes.size} پیر انتخاب‌شده و تخصیص کلاینت‌های آن‌ها حذف شوند؟`)) return;
         const selected = new Map(selectedRelayNodes);
@@ -6214,14 +6261,18 @@
             }, operation, selected);
             await loadInstalledRelays();
             void refreshAll().catch(error => setPollStatus(error.message));
-            select.value = '';
             if (!result.failed.length) {
                 selectedRelayNodes.clear();
                 relaySelectionMode = false;
             }
             return `انجام‌شده: ${result.removed}` + (result.failed.length ? ' · ناموفق: ' + result.failed.join('، ') : '');
         });
-    });
+    }
+
+    document.getElementById('relayBulkDelete').addEventListener('click', () => applyRelayBulk('delete'));
+    document.getElementById('relayBulkEnable').addEventListener('click', () => applyRelayBulk('enable'));
+    document.getElementById('relayBulkDisable').addEventListener('click', () => applyRelayBulk('disable'));
+    document.getElementById('relayBulkCancel').addEventListener('click', cancelRelaySelection);
     let relayCatalogBusy = false;
     let relayPage = 0;
     let relayPageSize = 30;
@@ -6536,6 +6587,8 @@
         relayPage = Math.min(relayPage, pages - 1);
         document.getElementById('relayPageCount').textContent = matches.length
             ? `صفحهٔ ${relayPage + 1} از ${pages} · ${matches.length} شهر` : 'شهری برای نمایش نیست';
+        const installedCount = [...(installedRelays?.values() || [])].filter(iface => iface.name?.startsWith('mv-wg-')).length;
+        document.getElementById('relayBoardCount').textContent = installedCount + ' پیر';
         document.getElementById('relayPagePrev').disabled = relayPage === 0;
         document.getElementById('relayPageNext').disabled = relayPage >= pages - 1;
         const numbers = document.getElementById('relayPageNumbers');
@@ -6571,12 +6624,17 @@
             const [installed, ...extra] = hideDisabled
                 ? city.installed.filter(iface => !isTrue(iface.disabled)) : city.installed;
             card.append(buildCityPeer(city.relays, installed));
+            bindRelaySelection(card, installed, 'details');
             if (extra.length) {
                 const legacy = document.createElement('details');
                 const summary = document.createElement('summary');
                 summary.textContent = `${extra.length} اینترفیس اضافهٔ موجود`;
                 legacy.append(summary);
-                for (const iface of extra) legacy.append(buildCityPeer(city.relays, iface));
+                for (const iface of extra) {
+                    const peer = buildCityPeer(city.relays, iface);
+                    bindRelaySelection(peer, iface);
+                    legacy.append(peer);
+                }
                 card.append(legacy);
             }
             rows.append(card);
@@ -6616,27 +6674,6 @@
         actions.className = 'relay-actions';
         if (iface) {
             card.dataset.relayInterface = iface.name;
-            if (iface.name.startsWith('mv-wg-') && iface['.id']) {
-                const selection = document.createElement('label');
-                selection.className = 'relay-select';
-                selection.hidden = true;
-                const checkbox = document.createElement('input');
-                checkbox.type = 'checkbox';
-                checkbox.setAttribute('aria-label', 'انتخاب ' + iface.name);
-                checkbox.addEventListener('change', () => toggleRelaySelection(iface));
-                selection.append(checkbox, 'انتخاب');
-                card.prepend(selection);
-                const onCardBody = event => !event.target.closest('button, a, input, label, select, summary, .relay-edit');
-                card.addEventListener('dblclick', event => {
-                    if (onCardBody(event) && !relaySelectionMode) {
-                        event.preventDefault();
-                        toggleRelaySelection(iface);
-                    }
-                });
-                card.addEventListener('click', event => {
-                    if (relaySelectionMode && event.detail === 1 && onCardBody(event)) toggleRelaySelection(iface);
-                });
-            }
             const stats = document.createElement('div');
             stats.className = 'relay-metrics';
             stats.innerHTML = `

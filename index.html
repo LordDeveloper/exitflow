@@ -4232,11 +4232,14 @@
         });
     }
 
-    function addressOnInterface(rows, iface, cidr) {
+    function staticModemAddress(rows, iface, cidr, gateway) {
         return rows.find(row => {
-            if (row.interface !== iface || isTrue(row.disabled) || isTrue(row.invalid)) return false;
-            try { return chrCidr(row.address).subnet === cidr.subnet; }
-            catch { return false; }
+            if (row.interface !== iface || isTrue(row.disabled) || isTrue(row.invalid) || isTrue(row.dynamic)) return false;
+            if (row.comment === 'CHR management access') return false;
+            try {
+                const parsed = chrCidr(row.address);
+                return parsed.subnet === cidr.subnet && parsed.host !== gateway;
+            } catch { return false; }
         });
     }
 
@@ -4248,14 +4251,14 @@
         throw new Error('در ' + cidr.subnet + ' آدرس آزادی برای تست CHR پیدا نشد.');
     }
 
-    async function addProbeAddress(iface, ip, prefix) {
+    async function addProbeAddress(iface, ip, prefix, comment = 'Exitflow modem probe') {
         const created = await apiFetch('/ip/address', 'PUT', {
-            address: ip + '/' + prefix, interface: iface, comment: 'Exitflow modem probe'
+            address: ip + '/' + prefix, interface: iface, comment
         });
         let id = asId(created);
         if (!id || !/^\*[0-9A-Fa-f]+$/.test(String(id))) {
             const rows = await apiList('/ip/address?.proplist=.id,address,interface,comment');
-            id = rows.find(row => row.interface === iface && row.comment === 'Exitflow modem probe' && ipOnly(row.address) === ip)?.['.id'] || null;
+            id = rows.find(row => row.interface === iface && row.comment === comment && ipOnly(row.address) === ip)?.['.id'] || null;
         }
         return id;
     }
@@ -4301,7 +4304,7 @@
             status.textContent = 'پینگ ' + gateway + ' از ' + iface + '…';
             let probeId = null;
             let source = '';
-            const present = addressOnInterface(state.allAddresses, iface, cidr);
+            const present = staticModemAddress(state.allAddresses, iface, cidr, gateway);
             if (present) source = chrCidr(present.address).host;
             else if (hits.length) continue;
             else {
@@ -4324,28 +4327,30 @@
         if (hits.length > 1) throw new Error(gateway + ' از چند اینترفیس جواب داد: ' + hits.join('، ') + '.');
         await ensureDetectedModemRoute(gateway, hits[0]);
         status.textContent = 'مودم روی ' + hits[0] + ' است. در حال ساخت DHCP…';
-        const dhcp = await createDetectedModemDhcp(gateway, hits[0]);
+        const dhcp = await createDetectedModemDhcp(gateway, hits[0], cidr.prefix);
         return 'مودم ' + gateway + ' روی ' + hits[0] + ' تشخیص داده شد. ' + dhcp;
     }
 
-    function modemFromDetection(state, gateway, iface) {
-        const found = discoverModems(state).find(item => item.gateway === gateway && item.iface === iface);
-        if (found) return found;
-        const row = state.allAddresses.find(item => {
-            if (item.interface !== iface || isTrue(item.disabled) || isTrue(item.invalid) || isTrue(item.dynamic)) return false;
-            try {
-                const cidr = chrCidr(item.address);
-                return cidr.contains(gateway) && cidr.host !== gateway;
-            } catch { return false; }
-        });
-        if (!row) throw new Error('روی ' + iface + ' آدرس CHR در ساب‌نت ' + gateway + ' نیست.');
-        const cidr = chrCidr(row.address);
+    function modemRecord(gateway, iface, address) {
+        const cidr = chrCidr(address);
         return { gateway, iface, chrAddress: cidr.host, prefix: cidr.prefix, subnet: cidr.subnet, cidr, seen: true };
     }
 
-    async function createDetectedModemDhcp(gateway, iface) {
+    async function ensureStaticModemAddress(state, gateway, iface, prefix) {
+        const cidr = chrCidr(gateway + '/' + prefix);
+        const present = staticModemAddress(state.allAddresses, iface, cidr, gateway);
+        if (present) return present.address;
+        const occupied = new Set(state.routerIps.map(sameHost).filter(ip => isIpv4(ip) && cidr.contains(ip)));
+        const ip = pickProbeAddress(cidr, gateway, occupied);
+        await addProbeAddress(iface, ip, prefix, 'Exitflow DHCP gateway');
+        state.routerIps.push(ip);
+        state.allAddresses.push({ address: ip + '/' + prefix, interface: iface, comment: 'Exitflow DHCP gateway' });
+        return ip + '/' + prefix;
+    }
+
+    async function createDetectedModemDhcp(gateway, iface, prefix) {
         const state = await readChrDhcp();
-        const modem = modemFromDetection(state, gateway, iface);
+        const modem = modemRecord(gateway, iface, await ensureStaticModemAddress(state, gateway, iface, prefix));
         const keeper = serverForModem(state, modem);
         for (const server of state.servers) {
             if (!server['.id'] || server.interface !== iface) continue;
@@ -4354,7 +4359,7 @@
         }
         await restoreModemAccess(state, modem);
         const fresh = await readChrDhcp();
-        const current = modemFromDetection(fresh, gateway, iface);
+        const current = modemRecord(gateway, iface, await ensureStaticModemAddress(fresh, gateway, iface, prefix));
         await ensureModemInternet(current.subnet, current);
         return 'DHCP روشن شد. کلاینت‌ها از ' + current.subnet + ' آدرس می‌گیرند و Gateway آن‌ها ' + current.chrAddress + ' است.';
     }

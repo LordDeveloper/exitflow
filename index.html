@@ -673,7 +673,8 @@
         .relay-metrics span, .relay-metrics small { color: #b4c5c3; font-size: 11px; }
         .relay-traffic { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; padding: 8px 10px; border: 1px solid #2a2426; border-radius: 10px; background: #120e10; }
         .relay-traffic > span { display: inline-flex; align-items: baseline; gap: 4px; min-width: 0; font-size: 12px; }
-        .relay-traffic strong { font-size: 13px; font-variant-numeric: tabular-nums; }
+        .relay-traffic strong, .relay-traffic small { direction: ltr; unicode-bidi: isolate; font-size: 13px; font-variant-numeric: tabular-nums; }
+        .relay-traffic > span > span { unicode-bidi: isolate; }
         .relay-traffic small:empty { display: none; }
         .relay-rx { color: #94e8ff; }
         .relay-tx { color: #9cf0c4; }

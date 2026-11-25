@@ -735,7 +735,7 @@
         .relay-icon[data-icon="restart"] { background: #3a2e22; color: #ffd7a8; border-color: #6a4e30; }
         .relay-icon[data-icon="edit"] { background: #243044; color: #d5e2f7; border-color: #3d5270; }
         .relay-icon[data-icon="remove"] { background: #3c2226; color: #ffdad6; border-color: #6e353c; }
-        .relay-icon[data-icon="install"] { background: #1e3328; color: #d8f3e4; border-color: #35664c; }
+        .relay-icon[data-icon="install"], .relay-icon[data-icon="extract"] { background: #1e3328; color: #d8f3e4; border-color: #35664c; }
         .relay-icon svg { width: 17px; height: 17px; }
         .relay-board-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
         .relay-board-head p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
@@ -6471,7 +6471,8 @@
             remove: 'M3 6h18 M9 6V3h6v3 M6 6l1 15h10l1-15 M10 10v7 M14 10v7',
             edit: 'M4 16l-1 5 5-1L21 7l-4-4z M14 6l4 4',
             traffic: 'M4 8h16 M15 3l5 5-5 5 M20 16H4 M9 11l-5 5 5 5',
-            install: 'M12 3v12 M7 10l5 5 5-5 M4 16v5h16v-5'
+            install: 'M12 3v12 M7 10l5 5 5-5 M4 16v5h16v-5',
+            extract: 'M4 4h6v6H4z M14 4h6v6h-6z M4 14h6v6H4z M14 14h6v6h-6z'
         };
         const button = relayButton(label, style + ' relay-icon', action && (() => {
             if (scope) void runIconAction(button, action);
@@ -6507,6 +6508,22 @@
 
     function relayCityKey(relay) {
         return relay.city ? JSON.stringify([relay.country, relay.city]) : relay.name;
+    }
+
+    function relayTaken(relay, exceptName) {
+        if (!installedRelays || !relay?.name) return false;
+        for (const item of installedRelays.values()) {
+            if (exceptName && item.name === exceptName) continue;
+            const peer = item.peer;
+            if (peer && relay.ip && peer['endpoint-address'] === relay.ip && peer['public-key'] === relay.publicKey) return true;
+            const named = item.name === 'mv-wg-' + relay.name || item.name === relay.name;
+            if (named && (!peer || !peer['endpoint-address'])) return true;
+        }
+        return false;
+    }
+
+    function relayIsFree(relay) {
+        return Boolean(relay?.ip && relay.active !== false && !relayTaken(relay));
     }
 
     function buildRelayPicker(options, selected, label, onChange) {
@@ -6634,16 +6651,27 @@
         })).filter(city => {
             if (relayCountry && city.country !== relayCountry) return false;
             if (relayCity && city.key !== relayCity) return false;
-            if (hideDisabled && city.installed.length && city.installed.every(iface => isTrue(iface.disabled))) return false;
+            if (hideDisabled && city.installed.length && city.installed.every(iface => isTrue(iface.disabled))
+                && !city.relays.some(relay => relayIsFree(relay))) return false;
             if (filter === 'installed' && !city.installed.length) return false;
-            if (filter === 'available' && (!installedRelays || city.installed.length)) return false;
+            if (filter === 'available' && !city.relays.some(relay => relayIsFree(relay))) return false;
             return [city.city, city.country, ...city.relays.flatMap(relay => [relay.name, relay.ip])]
                 .join(' ').toLowerCase().includes(query);
         }).map(city => ({ ...city, ping: bestRelayPing(city.installed) })).sort(compareRelayCities);
-        const pages = Math.max(1, Math.ceil(matches.length / relayPageSize));
+        const viewCards = [];
+        for (const city of matches) {
+            const installed = hideDisabled
+                ? city.installed.filter(iface => !isTrue(iface.disabled)) : city.installed;
+            const free = city.relays.filter(relayIsFree);
+            if (filter !== 'available') {
+                for (const iface of installed) viewCards.push({ city, iface, free });
+            }
+            if (filter !== 'installed' && free.length) viewCards.push({ city, iface: null, free });
+        }
+        const pages = Math.max(1, Math.ceil(viewCards.length / relayPageSize));
         relayPage = Math.min(relayPage, pages - 1);
-        document.getElementById('relayPageCount').textContent = matches.length
-            ? `صفحهٔ ${relayPage + 1} از ${pages} · ${matches.length} شهر` : 'شهری برای نمایش نیست';
+        document.getElementById('relayPageCount').textContent = viewCards.length
+            ? `صفحهٔ ${relayPage + 1} از ${pages} · ${viewCards.length} کارت` : 'کارتی برای نمایش نیست';
         const installedCount = [...(installedRelays?.values() || [])].filter(iface => iface.name?.startsWith('mv-wg-')).length;
         document.getElementById('relayBoardCount').textContent = installedCount + ' پیر';
         document.getElementById('relayPagePrev').disabled = relayPage === 0;
@@ -6663,37 +6691,33 @@
         }
         const rows = document.createDocumentFragment();
         const start = relayPage * relayPageSize;
-        for (const city of matches.slice(start, start + relayPageSize)) {
+        for (const city of viewCards.slice(start, start + relayPageSize)) {
             const card = document.createElement('section');
             card.className = 'relay-city';
             const header = document.createElement('header');
             header.className = 'relay-city-header';
             const heading = document.createElement('h3');
-            heading.textContent = [city.city, city.country].filter(Boolean).join(' · ');
-            const flag = city.country && relayFlag(city.relays[0].name.split('-')[0]);
+            heading.textContent = [city.city.city, city.city.country].filter(Boolean).join(' · ');
+            const flagCode = (city.city.relays[0]?.name || '').split('-')[0];
+            const flag = city.city.country && relayFlag(flagCode);
             if (flag) {
                 header.append(flag);
                 card.style.setProperty('--relay-flag-image', `url("${flag.getAttribute('src')}")`);
             }
-            const [installed, ...extra] = hideDisabled
-                ? city.installed.filter(iface => !isTrue(iface.disabled)) : city.installed;
-            card.dataset.installed = String(city.installed.length > 0);
-            card.dataset.presence = !installed ? 'missing' : isTrue(installed.disabled) ? 'off' : 'on';
+            card.dataset.installed = String(Boolean(city.iface));
+            card.dataset.presence = !city.iface ? 'missing' : isTrue(city.iface.disabled) ? 'off' : 'on';
             header.append(heading);
             card.append(header);
-            card.append(buildCityPeer(city.relays, installed));
-            bindRelaySelection(card, installed, 'details');
-            if (extra.length) {
-                const legacy = document.createElement('details');
-                const summary = document.createElement('summary');
-                summary.textContent = `${extra.length} اینترفیس اضافهٔ موجود`;
-                legacy.append(summary);
-                for (const iface of extra) {
-                    const peer = buildCityPeer(city.relays, iface);
-                    bindRelaySelection(peer, iface);
-                    legacy.append(peer);
-                }
-                card.append(legacy);
+            const peer = buildCityPeer(city.city.relays, city.iface);
+            card.append(peer);
+            bindRelaySelection(card, city.iface, 'details');
+            if (!city.iface && installedRelays && city.free.length > 1) {
+                peer.querySelector('.relay-actions').append(relayIcon('استخراج شهر', 'extract', 'success', () => {
+                    const pending = city.city.relays.filter(relayIsFree);
+                    if (!pending.length) return undefined;
+                    if (!window.confirm(`${pending.length} رلهٔ این شهر هر کدام به صورت یک نود جدا نصب شوند؟`)) return undefined;
+                    return mutateRelay(() => extractCityRelays(pending));
+                }, relayBusy, 'extract:' + city.city.key));
             }
             rows.append(card);
         }
@@ -6708,7 +6732,7 @@
         const peer = iface?.peer;
         const current = relays.find(relay => relay.ip && relay.ip === peer?.['endpoint-address']
             && relay.publicKey === peer?.['public-key']);
-        const choices = relays.filter(relay => relay.ip && relay.active !== false);
+        const choices = relays.filter(relay => relay.ip && relay.active !== false && !relayTaken(relay, iface?.name));
         const disabled = iface && isTrue(iface.disabled);
         card.dataset.presence = !iface ? 'missing' : disabled ? 'off' : 'on';
         const title = document.createElement('strong');
@@ -6951,6 +6975,24 @@
         }
     }
 
+    async function extractCityRelays(relays) {
+        const pending = relays.filter(relayIsFree);
+        if (!pending.length) throw new Error('رلهٔ آزادی برای استخراج در این شهر نمانده است.');
+        const failed = [];
+        let done = 0;
+        for (const relay of pending) {
+            relayStatus.textContent = `استخراج شهر: ${done + failed.length + 1} از ${pending.length}`;
+            try {
+                await installCatalogRelay(relay.name);
+                done += 1;
+            } catch (error) {
+                failed.push(`${relay.name}: ${error.message}`);
+            }
+        }
+        if (!done && failed.length) throw new Error(failed.join('، '));
+        return `ساخته‌شده: ${done} نود` + (failed.length ? ' · ناموفق: ' + failed.join('، ') : '');
+    }
+
     async function installCatalogRelay(name) {
         const { relay, address, key } = await localDashboard('provision', { name });
         const iface = 'mv-wg-' + relay.name;
@@ -6961,12 +7003,6 @@
             apiList('/routing/table?.proplist=.id,name'),
             apiList('/ip/address?.proplist=.id,address,interface')
         ]);
-        const cityInterfaces = new Set(relayCatalog
-            .filter(item => relayCityKey(item) === relayCityKey(relay))
-            .map(item => 'mv-wg-' + item.name));
-        if (interfaces.some(item => item.name !== iface && cityInterfaces.has(item.name))) {
-            throw new Error('این شهر از قبل نصب شده است. از گزینهٔ ویرایش رله استفاده کنید.');
-        }
         if (peers.some(peer => peer.interface !== iface && peer['endpoint-address'] === relay.ip
             && peer['public-key'] === relay.publicKey)) {
             throw new Error('این رله از قبل روی اینترفیس دیگری نصب شده است');

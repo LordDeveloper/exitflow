@@ -565,9 +565,48 @@
         .dhcp-form label { display: grid; gap: 6px; font-size: 12px; color: var(--muted); }
         .dhcp-form select, .dhcp-form input { width: 100%; min-width: 0; }
         .dhcp-form label[hidden] { display: none; }
-        .dhcp-hint, .dhcp-range, .dhcp-actions { grid-column: 1 / -1; }
-        .dhcp-custom span[role="status"] { color: #fbbf24; }
-        .dhcp-custom span[role="status"]:empty, #chrDhcpFormHint:empty { display: none; }
+        .dhcp-dns-field, .dhcp-hint, .dhcp-range, .dhcp-actions { grid-column: 1 / -1; }
+        .dhcp-dns-field { position: relative; z-index: 1; }
+        .dhcp-dns-field:focus-within { z-index: 4; }
+        .dhcp-dns-combo { position: relative; }
+        .dhcp-dns-list {
+            position: absolute;
+            z-index: 5;
+            inset-inline: 0;
+            top: calc(100% + 4px);
+            max-height: 220px;
+            margin: 0;
+            padding: 4px;
+            overflow: auto;
+            list-style: none;
+            background: #1a314c;
+            border: 1px solid #5a7799;
+            border-radius: 8px;
+            box-shadow: 0 12px 24px #080e1899;
+        }
+        .dhcp-dns-list[hidden] { display: none; }
+        .dhcp-dns-list [role="option"] {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            min-height: 36px;
+            padding: 7px 10px;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        .dhcp-dns-list [role="option"] small {
+            color: var(--muted);
+            direction: ltr;
+            font-family: ui-monospace, Consolas, monospace;
+        }
+        .dhcp-dns-list [role="option"]:hover,
+        .dhcp-dns-list [role="option"].active { background: #253850; }
+        .dhcp-dns-list [role="option"][data-current="true"] { box-shadow: inset 3px 0 0 #60a5fa; }
+        .dhcp-dns-insert { color: #93c5fd; }
+        .dhcp-dns-empty { padding: 8px; color: var(--muted); font-size: 12px; }
+        .dhcp-dns-field [role="status"] { color: #fbbf24; }
+        .dhcp-dns-field [role="status"]:empty { display: none; }
         .dhcp-hint { margin: 0; color: #fbbf24; font-size: 12px; }
         .dhcp-range { margin: 0; direction: ltr; text-align: left; color: #93c5fd; font-size: 12px; font-family: ui-monospace, Consolas, monospace; }
         .dhcp-actions { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -1782,7 +1821,20 @@
         return /^\*[0-9A-Fa-f]+$/.test(String(value || ''));
     }
 
+    async function ensureFibTable(name) {
+        const tables = await apiList('/routing/table?.proplist=.id,name,fib');
+        const existing = tables.find((row) => row.name === name);
+        if (!existing) {
+            await apiFetch('/routing/table', 'PUT', { name, fib: 'yes' });
+            return;
+        }
+        if (!isTrue(existing.fib) && existing['.id']) {
+            await apiFetch('/routing/table/' + assertId(existing['.id']), 'PATCH', { fib: 'yes' });
+        }
+    }
+
     async function ensureUpstreamHandshake() {
+        await ensureFibTable('mv2tr');
         const mangles = asList(await apiFetch('/ip/firewall/mangle'));
         let notes = '';
         const hasPrerouting = mangles.some((rule) => rule.chain === 'prerouting' && markOf(rule) === 'mv2tr' && String(rule['dst-address-list'] || '') === 'MVIPs' && !isTrue(rule.disabled));
@@ -2055,6 +2107,7 @@
 
         const hasMangle = mangles.some((rule) => rule['src-address-list'] === peerName && markOf(rule) === peerName && !isTrue(rule.disabled));
         if (!hasMangle) {
+            await ensureFibTable(peerName);
             await apiFetch('/ip/firewall/mangle', 'PUT', {
                 chain: 'prerouting',
                 action: 'mark-routing',
@@ -2074,6 +2127,7 @@
 
         const hasRule = rules.some((rule) => (rule['routing-mark'] || '') === peerName && (rule.table || rule['routing-table'] || '') === peerName && !isTrue(rule.disabled));
         if (!hasRule) {
+            await ensureFibTable(peerName);
             await apiFetch('/routing/rule', 'PUT', {
                 action: 'lookup-only-in-table',
                 table: peerName,
@@ -2938,6 +2992,7 @@
         }
     }
 
+    let chrDnsFieldSerial = 0;
     const CHR_DNS_PRESETS = [
         ['Cloudflare', '1.1.1.1,1.0.0.1'],
         ['Google', '8.8.8.8,8.8.4.4'],
@@ -2966,7 +3021,7 @@
         const running = new Map(interfaces.map(row => [row.name, row.running === undefined ? null : isTrue(row.running)]));
         const staticAddresses = addresses.filter(row => !isTrue(row.dynamic) && !isTrue(row.disabled)
             && !isTrue(row.invalid) && eligible.has(row.interface) && isIpv4(ipOnly(row.address)) && row.address.includes('/'));
-        return {
+        const snapshot = {
             addresses: staticAddresses,
             pools,
             networks,
@@ -2980,6 +3035,74 @@
             allAddresses: addresses,
             servers
         };
+        return probeModemGateways(snapshot);
+    }
+
+    function sameHost(ip) {
+        const host = ipOnly(ip);
+        return isIpv4(host) ? host.split('.').map(Number).join('.') : '';
+    }
+
+    function gatewayInArp(state, gateway, iface) {
+        return state.arp.some(row => sameHost(row.address) === gateway && (!row.interface || row.interface === iface));
+    }
+
+    // A connected cable does not create an ARP entry until CHR talks to the gateway.
+    async function probeModemGateways(state) {
+        if (discoverModems(state).length) return state;
+        const targets = [];
+        for (const route of state.routes) {
+            if (!isMainDefault(route)) continue;
+            const parsed = parseRouteGateway(route);
+            if (!parsed?.iface || state.running.get(parsed.iface) === false) continue;
+            if (gatewayInArp(state, parsed.gateway, parsed.iface)) continue;
+            targets.push(parsed);
+        }
+        if (!targets.length) return state;
+        for (const target of targets.slice(0, 2)) {
+            try {
+                await apiFetch('/ping', 'POST', { address: target.gateway, interface: target.iface, count: '1' }, 4000);
+            } catch { /* a timeout still leaves an ARP entry when the modem answered */ }
+        }
+        const [arp, routes] = await Promise.all([
+            apiList('/ip/arp?.proplist=address,interface'),
+            apiList('/ip/route?.proplist=.id,dst-address,routing-table,active,disabled,gateway,immediate-gw,comment')
+        ]);
+        return Object.assign({}, state, { arp, routes });
+    }
+
+    function isMainDefault(route) {
+        return normPrefix(route['dst-address']) === '0.0.0.0/0' && (route['routing-table'] || 'main') === 'main' && !isTrue(route.disabled);
+    }
+
+    function modemMissNote(state) {
+        const notes = [];
+        for (const route of state.routes) {
+            if (!isMainDefault(route)) continue;
+            const parsed = parseRouteGateway(route);
+            if (!parsed) {
+                notes.push('مسیر پیش‌فرض گیت‌وی قابل‌خواندن ندارد.');
+                continue;
+            }
+            const where = parsed.gateway + (parsed.iface ? ' روی ' + parsed.iface : '');
+            const reasons = [];
+            if (parsed.iface && state.running.get(parsed.iface) === false) reasons.push('لینک اینترفیس قطع است');
+            else if (parsed.iface && !state.eligible.has(parsed.iface)) reasons.push('اینترفیس برای DHCP مناسب نیست');
+            const hasAddress = state.addresses.some(row => {
+                if (parsed.iface && row.interface !== parsed.iface) return false;
+                try {
+                    const cidr = chrCidr(row.address);
+                    return cidr.contains(parsed.gateway) && cidr.host !== parsed.gateway;
+                } catch { return false; }
+            });
+            if (!hasAddress) reasons.push('CHR در ساب‌نت این گیت‌وی آدرس ندارد');
+            if (!isTrue(route.active)) reasons.push('مسیر پیش‌فرض غیرفعال است');
+            if (!gatewayInArp(state, parsed.gateway, parsed.iface)) reasons.push('گیت‌وی در ARP نیست');
+            notes.push(reasons.length ? where + ': ' + reasons.join('، ') + '.' : where + ' دیده شد ولی به‌عنوان مودم قبول نشد.');
+        }
+        if (notes.length) return 'مودم متصلی دیده نشد. ' + notes.join(' ');
+        const up = [...state.running.entries()].filter(([, running]) => running).map(([name]) => name);
+        return 'مودم متصلی دیده نشد. مسیر پیش‌فرض main به سمت مودم وجود ندارد. اینترفیس‌های روشن: ' + (up.join('، ') || 'هیچ') + '.';
     }
 
     function chrIpNumber(ip) {
@@ -3039,11 +3162,11 @@
         };
     }
 
-    // A modem counts only while its gateway is reachable: the default route is active and the gateway is in ARP.
+    // A modem counts when its interface is up and the gateway is either an active default route or present in ARP.
     function discoverModems(state) {
         const found = new Map();
         for (const route of state.routes) {
-            if (route['dst-address'] !== '0.0.0.0/0' || (route['routing-table'] || 'main') !== 'main' || isTrue(route.disabled) || !isTrue(route.active)) continue;
+            if (!isMainDefault(route)) continue;
             const parsed = parseRouteGateway(route);
             if (!parsed) continue;
             const candidates = state.addresses.filter(row => {
@@ -3060,8 +3183,8 @@
             if (state.running.get(iface) === false) continue;
             const address = candidates.find(row => row.interface === iface);
             if (!address) continue;
-            const seen = state.arp.some(row => row.address === parsed.gateway && (!row.interface || row.interface === iface));
-            if (!seen) continue;
+            const seen = gatewayInArp(state, parsed.gateway, iface);
+            if (!isTrue(route.active) && !seen) continue;
             const cidr = chrCidr(address.address);
             const key = parsed.gateway + '%' + iface;
             if (found.has(key)) continue;
@@ -3175,7 +3298,7 @@
             const empty = document.createElement('p');
             empty.className = 'dhcp-empty';
             empty.textContent = state
-                ? 'مودم متصلی دیده نشد. محدودهٔ DHCP فقط از ساب‌نت همان مودمی ساخته می‌شود که در ARP روی اینترفیس خودش دیده شود.'
+                ? modemMissNote(state)
                 : 'بعد از اتصال به CHR، مودم‌ها اینجا دیده می‌شوند.';
             list.append(empty);
             return;
@@ -3251,67 +3374,196 @@
             .map(item => item.trim()).filter(isIpv4)
             .map(ip => ip.split('.').map(Number).join('.'));
         const currentValue = currentDns.join(',');
-        const knownPreset = CHR_DNS_PRESETS.some(([, value]) => value === currentValue);
+        let committed = CHR_DNS_PRESETS.some(([, value]) => value === currentValue) || currentDns.length
+            ? currentValue
+            : CHR_DNS_PRESETS[0][1];
+        let editing = false;
+        let activeIndex = -1;
 
         const dnsLabel = document.createElement('label');
+        dnsLabel.className = 'dhcp-dns-field';
         dnsLabel.textContent = 'DNS کلاینت‌ها';
-        const dnsSelect = document.createElement('select');
-        dnsSelect.required = true;
-        for (const [label, value] of CHR_DNS_PRESETS) {
-            const option = document.createElement('option');
-            option.value = value;
-            option.textContent = label;
-            dnsSelect.append(option);
-        }
-        const customOption = document.createElement('option');
-        customOption.value = 'custom';
-        customOption.textContent = 'سفارشی';
-        dnsSelect.append(customOption);
-        dnsSelect.value = knownPreset ? currentValue : (currentDns.length ? 'custom' : CHR_DNS_PRESETS[0][1]);
-        dnsLabel.append(dnsSelect);
-
-        const customLabel = document.createElement('label');
-        customLabel.className = 'dhcp-custom';
-        customLabel.textContent = 'DNS سفارشی IPv4';
-        const customInput = document.createElement('input');
-        customInput.dir = 'ltr';
-        customInput.placeholder = '1.1.1.1, 1.0.0.1';
-        customInput.autocomplete = 'off';
-        customInput.spellcheck = false;
-        customInput.value = knownPreset ? '' : currentValue;
+        const combo = document.createElement('div');
+        combo.className = 'dhcp-dns-combo';
+        const dnsListId = 'dhcp-dns-' + (chrDnsFieldSerial += 1);
+        const dnsInput = document.createElement('input');
+        dnsInput.required = true;
+        dnsInput.dir = 'auto';
+        dnsInput.placeholder = 'جستجو یا IPv4 جدید';
+        dnsInput.autocomplete = 'off';
+        dnsInput.spellcheck = false;
+        dnsInput.setAttribute('role', 'combobox');
+        dnsInput.setAttribute('aria-autocomplete', 'list');
+        dnsInput.setAttribute('aria-expanded', 'false');
+        dnsInput.setAttribute('aria-controls', dnsListId);
+        const dnsList = document.createElement('ul');
+        dnsList.id = dnsListId;
+        dnsList.className = 'dhcp-dns-list';
+        dnsList.setAttribute('role', 'listbox');
+        dnsList.hidden = true;
         const dnsError = document.createElement('span');
         dnsError.role = 'status';
-        customLabel.append(customInput, dnsError);
+        combo.append(dnsInput, dnsList);
+        dnsLabel.append(combo, dnsError);
 
-        function parseCustomDns() {
-            return customInput.value.split(/[,\s]+/).map(item => item.trim()).filter(Boolean);
+        function displayOf(value) {
+            return CHR_DNS_PRESETS.find(([, preset]) => preset === value)?.[0] || value;
         }
 
-        function selectedDns() {
-            if (dnsSelect.value !== 'custom') return dnsSelect.value.split(',');
-            return parseCustomDns().map(item => item.split('.').map(Number).join('.'));
+        function normalizedIps(text) {
+            const parts = String(text || '').split(/[,\s]+/).map(item => item.trim()).filter(Boolean);
+            if (!parts.length || parts.some(item => !isIpv4(item))) return null;
+            return parts.map(item => item.split('.').map(Number).join('.')).join(',');
         }
 
-        function syncCustomDns() {
-            const custom = dnsSelect.value === 'custom';
-            customLabel.hidden = !custom;
-            customInput.required = custom;
-            if (!custom) dnsError.textContent = '';
+        function closeDnsList() {
+            dnsList.hidden = true;
+            dnsInput.setAttribute('aria-expanded', 'false');
+            dnsInput.removeAttribute('aria-activedescendant');
+            activeIndex = -1;
         }
 
-        function validateCustomDns() {
-            if (dnsSelect.value !== 'custom') return true;
-            const parts = parseCustomDns();
-            if (!parts.length || parts.some(item => !isIpv4(item))) {
-                dnsError.textContent = 'یک یا چند IPv4 معتبر، با کاما جدا شده، وارد کنید.';
-                return false;
-            }
+        function commitDns(value) {
+            committed = value;
+            editing = false;
+            dnsInput.value = displayOf(value);
             dnsError.textContent = '';
-            return true;
+            closeDnsList();
         }
 
-        syncCustomDns();
-        dnsSelect.addEventListener('change', syncCustomDns);
+        function paintDnsList() {
+            const query = editing ? dnsInput.value.trim() : '';
+            const needle = query.toLowerCase();
+            const matches = CHR_DNS_PRESETS.filter(([label, value]) => !needle
+                || label.toLowerCase().includes(needle)
+                || value.includes(needle));
+            const typed = normalizedIps(query);
+            const rows = matches.map(([label, value]) => ({ label, value, meta: value, insert: false }));
+            if (typed && !CHR_DNS_PRESETS.some(([, value]) => value === typed)) {
+                rows.push({ label: 'افزودن ' + typed, value: typed, meta: '', insert: true });
+            }
+            dnsList.replaceChildren();
+            if (!rows.length) {
+                const empty = document.createElement('li');
+                empty.className = 'dhcp-dns-empty';
+                empty.textContent = 'موردی پیدا نشد. برای افزودن، یک IPv4 معتبر بنویسید.';
+                dnsList.append(empty);
+                activeIndex = -1;
+                return;
+            }
+            if (activeIndex >= rows.length) activeIndex = rows.length - 1;
+            rows.forEach((row, index) => {
+                const item = document.createElement('li');
+                item.id = dnsListId + '-' + index;
+                item.setAttribute('role', 'option');
+                item.dataset.value = row.value;
+                item.setAttribute('aria-selected', String(index === activeIndex));
+                if (row.value === committed) item.dataset.current = 'true';
+                if (index === activeIndex) item.classList.add('active');
+                const name = document.createElement('span');
+                name.textContent = row.label;
+                if (row.insert) name.className = 'dhcp-dns-insert';
+                item.append(name);
+                if (row.meta) {
+                    const meta = document.createElement('small');
+                    meta.textContent = row.meta;
+                    item.append(meta);
+                }
+                item.addEventListener('click', () => commitDns(row.value));
+                dnsList.append(item);
+            });
+            if (activeIndex >= 0) dnsInput.setAttribute('aria-activedescendant', dnsListId + '-' + activeIndex);
+        }
+
+        function openDnsList() {
+            dnsList.hidden = false;
+            dnsInput.setAttribute('aria-expanded', 'true');
+            paintDnsList();
+        }
+
+        function acceptDnsQuery() {
+            if (!editing) return true;
+            const query = dnsInput.value.trim();
+            if (!query) {
+                commitDns(committed);
+                return true;
+            }
+            const typed = normalizedIps(query);
+            const preset = CHR_DNS_PRESETS.find(([label, value]) => label.toLowerCase() === query.toLowerCase() || value === typed);
+            if (preset) {
+                commitDns(preset[1]);
+                return true;
+            }
+            if (typed) {
+                commitDns(typed);
+                return true;
+            }
+            dnsError.textContent = 'نام سرویس را از فهرست انتخاب کنید یا یک IPv4 معتبر وارد کنید.';
+            closeDnsList();
+            return false;
+        }
+
+        function moveDnsActive(step) {
+            const count = dnsList.querySelectorAll('[role="option"]').length;
+            if (!count) return;
+            activeIndex = activeIndex < 0 ? (step > 0 ? 0 : count - 1) : (activeIndex + step + count) % count;
+            paintDnsList();
+            dnsList.querySelector('.active')?.scrollIntoView({ block: 'nearest' });
+        }
+
+        dnsInput.value = displayOf(committed);
+        dnsList.addEventListener('mousedown', event => event.preventDefault());
+        dnsInput.addEventListener('focus', () => {
+            editing = false;
+            dnsInput.select();
+            openDnsList();
+        });
+        dnsInput.addEventListener('input', () => {
+            editing = true;
+            activeIndex = -1;
+            dnsError.textContent = '';
+            openDnsList();
+        });
+        dnsInput.addEventListener('keydown', event => {
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                event.preventDefault();
+                if (dnsList.hidden) openDnsList();
+                moveDnsActive(event.key === 'ArrowDown' ? 1 : -1);
+                return;
+            }
+            if (event.key === 'Escape') {
+                editing = false;
+                dnsInput.value = displayOf(committed);
+                dnsError.textContent = '';
+                closeDnsList();
+                return;
+            }
+            if (event.key !== 'Enter' || dnsList.hidden) return;
+            event.preventDefault();
+            const chosen = dnsList.querySelector('.active') || dnsList.querySelector('[role="option"]');
+            const typed = normalizedIps(dnsInput.value);
+            if (activeIndex >= 0 && chosen) commitDns(chosen.dataset.value);
+            else if (typed) commitDns(typed);
+            else if (chosen) commitDns(chosen.dataset.value);
+        });
+        function finishDnsEdit() {
+            if (!dnsInput.isConnected) return;
+            acceptDnsQuery();
+            closeDnsList();
+        }
+        combo.addEventListener('focusout', event => {
+            if (combo.contains(event.relatedTarget)) return;
+            finishDnsEdit();
+        });
+        const closeDnsOnOutside = event => {
+            if (!dnsInput.isConnected) {
+                document.removeEventListener('pointerdown', closeDnsOnOutside);
+                return;
+            }
+            if (combo.contains(event.target) || dnsList.hidden) return;
+            finishDnsEdit();
+        };
+        document.addEventListener('pointerdown', closeDnsOnOutside);
 
         const preview = document.createElement('p');
         preview.className = 'dhcp-range';
@@ -3336,7 +3588,6 @@
         }
         count.addEventListener('input', paintPreview);
         internet.addEventListener('change', paintPreview);
-        customInput.addEventListener('input', () => { dnsError.textContent = ''; });
 
         const actions = document.createElement('div');
         actions.className = 'dhcp-actions';
@@ -3344,14 +3595,14 @@
         submit.type = 'submit';
         submit.textContent = server ? 'به‌روزرسانی DHCP' : 'ذخیره DHCP';
         actions.append(submit);
-        form.append(countLabel, internetLabel, dnsLabel, customLabel, preview, hint, actions);
+        form.append(countLabel, internetLabel, dnsLabel, preview, hint, actions);
         form.addEventListener('submit', event => {
             event.preventDefault();
-            if (chrDhcpBusy || !validateCustomDns()) return;
+            if (chrDhcpBusy || !acceptDnsQuery()) return;
             const egress = modems.find(item => item.gateway + '%' + item.iface === internet.value);
             void runChrDhcpAction(current => saveModemDhcp(current, modem, egress, {
                 count: Number(count.value),
-                dns: selectedDns()
+                dns: committed.split(',')
             }));
         });
         paintPreview();
@@ -3494,6 +3745,32 @@
         }
     }
 
+    function pickFreshChrAddress(state, modem) {
+        const occupied = new Set([modem.gateway, modem.chrAddress, ...state.arp.map(row => row.address),
+            ...state.leases.flatMap(row => [row.address, row['active-address']]), ...state.routerIps]
+            .filter(ip => isIpv4(ip) && modem.cidr.contains(ip)));
+        for (let value = modem.cidr.network + modem.cidr.size - 2; value > modem.cidr.network; value -= 1) {
+            const ip = chrFormatIp(value);
+            if (!occupied.has(ip)) return ip;
+        }
+        throw new Error('در ' + modem.subnet + ' آدرس آزادی برای CHR پیدا نشد.');
+    }
+
+    async function replaceModemChrAddress(state, modem) {
+        const next = pickFreshChrAddress(state, modem);
+        for (const row of state.allAddresses) {
+            if (!row['.id'] || row.interface !== modem.iface || row.comment === 'CHR management access') continue;
+            try {
+                if (chrCidr(row.address).subnet !== modem.subnet) continue;
+            } catch { continue; }
+            await deleteById('/ip/address', row['.id']);
+        }
+        await apiFetch('/ip/address', 'PUT', {
+            address: next + '/' + modem.prefix, interface: modem.iface, comment: 'Exitflow DHCP gateway'
+        });
+        return next;
+    }
+
     async function restoreModemAccess(state, modem) {
         const comment = 'Exitflow DHCP: ' + modem.gateway;
         const network = state.networks.find(row => row.address === modem.subnet);
@@ -3507,16 +3784,21 @@
             });
         }
         const server = serverForModem(state, modem);
+        const ranges = allocateChrPool(modem.cidr, 50, reservedModemIps(state, modem));
+        const poolName = server ? (() => {
+            const current = serverPool(state, server);
+            const shared = current && (state.servers.some(row => row !== server && row['address-pool'] === current.name)
+                || state.pools.some(row => row['next-pool'] === current.name));
+            return current && !shared ? current.name : modemServerName(modem.gateway);
+        })() : modemServerName(modem.gateway);
+        const existingPool = state.pools.find(row => row.name === poolName);
+        if (!existingPool) await apiFetch('/ip/pool', 'PUT', { name: poolName, ranges, comment });
+        else if (existingPool.ranges !== ranges) await apiFetch('/ip/pool/' + assertId(existingPool['.id']), 'PATCH', { ranges });
         if (server) {
             await apiFetch('/ip/dhcp-server/' + assertId(server['.id']), 'PATCH', {
-                interface: modem.iface, disabled: 'no', comment
+                interface: modem.iface, 'address-pool': poolName, disabled: 'no', comment
             });
             return;
-        }
-        const ranges = allocateChrPool(modem.cidr, 50, reservedModemIps(state, modem));
-        const poolName = modemServerName(modem.gateway);
-        if (!state.pools.some(row => row.name === poolName)) {
-            await apiFetch('/ip/pool', 'PUT', { name: poolName, ranges, comment });
         }
         await apiFetch('/ip/dhcp-server', 'PUT', {
             name: poolName, interface: modem.iface, 'address-pool': poolName, disabled: 'no', comment
@@ -3528,9 +3810,11 @@
         if (!modems.length) throw new Error('مودم متصلی دیده نشد. بازنشانی انجام نشد و محدودهٔ قبلی اعمال نمی‌شود.');
         const subnets = modems.map(modem => modem.subnet).join('، ');
         if (!window.confirm(
-            'DHCP خارج از ' + subnets + ' پاک شود؟ آدرس CHR روی همین شبکه می‌ماند و Gateway کلاینت‌ها همان آدرس CHR می‌شود. بعد از اجرا وای‌فای را قطع و وصل کنید.'
+            'آدرس قبلی CHR روی ' + subnets + ' حذف شود و یک آدرس آزاد تازه در همان رنج مودم ساخته شود؟ بعد از اجرا وای‌فای را قطع و وصل کنید.'
         )) return 'بازنشانی لغو شد.';
         await removeOutsideModemSubnets(state, modems);
+        const created = [];
+        for (const modem of modems) created.push(await replaceModemChrAddress(state, modem));
         let fresh = await readChrDhcp();
         for (const modem of discoverModems(fresh)) {
             await restoreModemAccess(fresh, modem);
@@ -3538,7 +3822,7 @@
             const current = discoverModems(fresh).find(item => item.gateway === modem.gateway && item.iface === modem.iface);
             if (current) await ensureModemInternet(current.subnet, current);
         }
-        return 'بازنشانی شد. وای‌فای را قطع و وصل کنید تا ویندوز از ' + subnets + ' آدرس بگیرد و به CHR برسد.';
+        return 'بازنشانی شد. آدرس جدید CHR: ' + created.join('، ') + '. وای‌فای را قطع و وصل کنید.';
     }
 
     function dhcpResetSource() {

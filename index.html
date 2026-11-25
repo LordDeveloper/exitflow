@@ -733,7 +733,18 @@
         .relay-icon[data-icon="traffic"] { background: #1c3338; color: #c2e7f2; border-color: #2d5d68; }
         .relay-icon[data-icon="trace"] { background: #2e2642; color: #e0d4ff; border-color: #53407a; }
         .relay-icon[data-icon="restart"] { background: #3a2e22; color: #ffd7a8; border-color: #6a4e30; }
-        .relay-icon[data-icon="edit"] { background: #243044; color: #d5e2f7; border-color: #3d5270; }
+        .relay-icon[data-icon="edit"], .relay-icon[data-icon="swap"] { background: #243044; color: #d5e2f7; border-color: #3d5270; }
+        .relay-change-card { width: min(460px, 96vw); }
+        #relayChangeModal .modal-head h3 { color: #d5eee4; }
+        .relay-change-list { display: grid; gap: 8px; max-height: min(50vh, 420px); overflow: auto; }
+        .relay-change-option {
+            display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; align-items: center;
+            margin: 0; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border);
+            background: #171b20; cursor: pointer;
+        }
+        .relay-change-option:has(input:checked) { border-color: #3d6b58; background: #1c2a24; }
+        .relay-change-option span { direction: ltr; unicode-bidi: isolate; text-align: left; font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
+        .relay-change-actions { display: flex; gap: 8px; justify-content: flex-start; padding: 12px 18px; border-top: 1px solid var(--border); }
         .relay-icon[data-icon="remove"] { background: #3c2226; color: #ffdad6; border-color: #6e353c; }
         .relay-icon[data-icon="install"], .relay-icon[data-icon="extract"] { background: #1e3328; color: #d8f3e4; border-color: #35664c; }
         .relay-icon svg { width: 17px; height: 17px; }
@@ -1311,6 +1322,23 @@
                     <tbody id="clientPingBody"></tbody>
                 </table>
             </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal-backdrop" id="relayChangeModal" hidden role="dialog" aria-modal="true" aria-labelledby="relayChangeTitle">
+    <div class="modal-card relay-change-card">
+        <div class="modal-head">
+            <h3 id="relayChangeTitle">تغییر رله</h3>
+            <button type="button" class="ghost compact" id="relayChangeClose">بستن ✕</button>
+        </div>
+        <div class="modal-body">
+            <p id="relayChangeHint" class="muted"></p>
+            <div id="relayChangeOptions" class="relay-change-list" role="radiogroup" aria-labelledby="relayChangeTitle"></div>
+        </div>
+        <div class="relay-change-actions">
+            <button type="button" id="relayChangeApply" class="info">اعمال</button>
+            <button type="button" id="relayChangeCancel" class="ghost">انصراف</button>
         </div>
     </div>
 </div>
@@ -2444,13 +2472,33 @@
         return [wg.name, wg.comment, describePeer(wg.name, wg.comment), wg.endpoint].filter(Boolean).join(' ');
     }
 
+    function lastPeerPing(name) {
+        const test = peerTests.get(name);
+        if (!test || test.state !== 'ok') return null;
+        return pingMilliseconds(test.avg);
+    }
+
+    function comparePeersByPing(a, b) {
+        const availability = Number(Boolean(a.disabled)) - Number(Boolean(b.disabled));
+        if (availability) return availability;
+        const aPing = lastPeerPing(a.name);
+        const bPing = lastPeerPing(b.name);
+        if (aPing == null || bPing == null) {
+            if (aPing == null && bPing == null) return peerLabel(a).localeCompare(peerLabel(b), 'en');
+            return aPing == null ? 1 : -1;
+        }
+        return (bPing - aPing) || peerLabel(a).localeCompare(peerLabel(b), 'en');
+    }
+
     function peerMeta(wg) {
         const handshake = (wg && wg.handshake) || 'بدون هندشیک';
-        return wg && wg.disabled ? ('غیرفعال · ' + handshake) : handshake;
+        const base = wg && wg.disabled ? ('غیرفعال · ' + handshake) : handshake;
+        const ping = wg && lastPeerPing(wg.name);
+        return ping == null ? base : base + ' · پینگ ' + Number(ping.toFixed(1)) + ' ms';
     }
 
     function peerStructureStamp() {
-        return wgInterfaces.map((wg) => [wg.name, wg.comment, wg.disabled ? '1' : '0', wg.endpoint].join('|')).join('\n');
+        return wgInterfaces.map((wg) => [wg.name, wg.comment, wg.disabled ? '1' : '0', wg.endpoint, lastPeerPing(wg.name) ?? ''].join('|')).join('\n');
     }
 
     function pickerValue(picker) {
@@ -2488,15 +2536,16 @@
     }
 
     function pickerPeerOptions(picker) {
-        if (picker.id !== 'pathTestPicker') return wgInterfaces.filter(peer => !peer.disabled);
-        if (!wgCatalog.length) return wgInterfaces;
-        return wgCatalog.map(model => ({
-            name: model.name,
-            comment: model.comment,
-            disabled: model.disabled,
-            endpoint: model.health?.endpoint || '',
-            handshake: model.health?.text || 'بدون هندشیک'
-        }));
+        const list = picker.id !== 'pathTestPicker'
+            ? wgInterfaces.filter(peer => !peer.disabled)
+            : (!wgCatalog.length ? wgInterfaces : wgCatalog.map(model => ({
+                name: model.name,
+                comment: model.comment,
+                disabled: model.disabled,
+                endpoint: model.health?.endpoint || '',
+                handshake: model.health?.text || 'بدون هندشیک'
+            })));
+        return list.slice().sort(comparePeersByPing);
     }
 
     function fillPickerList(picker, current) {
@@ -2856,24 +2905,28 @@
         return ipOnly(peer?.['current-endpoint-address'] || peer?.['endpoint-address'] || '');
     }
 
-    async function testPeerPath(name, srcAddress, customTarget, customCount) {
+    async function testPeerPath(name, srcAddress, customTarget, customCount, options = {}) {
+        const quiet = Boolean(options && options.quiet);
+        const tell = (message, failed) => { if (!quiet) setStatus(message, failed); };
         if (!monitoring) {
-            setStatus('اول به روتر متصل شو.', true);
+            tell('اول به روتر متصل شو.', true);
             return;
         }
         if (peerTests.get(name)?.state === 'running' || peerTrafficTests.get(name)?.running) {
-            setStatus('تست این نود هنوز تمام نشده.', true);
+            tell('تست این نود هنوز تمام نشده.', true);
             return;
         }
         const endpoint = !customTarget;
         const iface = installedRelays?.get(name.startsWith('mv-wg-') ? name.slice(6) : name);
-        const target = endpoint ? relayPingAddress(iface) : normalizePingTarget(customTarget);
+        const target = endpoint
+            ? (relayPingAddress(iface) || ipOnly(options && options.endpointAddress))
+            : normalizePingTarget(customTarget);
         if (!target) {
-            setStatus('آدرس مقصد پینگ در دسترس نیست.', true);
+            tell('آدرس مقصد پینگ در دسترس نیست.', true);
             return;
         }
         if (peerPingTargetBusy(target)) {
-            setStatus('تست دیگری به همین مقصد در حال اجراست. بعد از پایان آن دوباره امتحان کن.', true);
+            tell('تست دیگری به همین مقصد در حال اجراست. بعد از پایان آن دوباره امتحان کن.', true);
             return;
         }
         const countNum = endpoint ? 1 : Math.min(20, Math.max(1, Number(customCount) || 3));
@@ -2898,7 +2951,7 @@
             peerTests.set(name, { state: 'error', endpoint, previousAvg, checkedAt: Date.now(), text: 'اجرای تست: ' + err.message });
         }
         const test = peerTests.get(name);
-        showRelayToast('تست پینگ · ' + name, test.text, test.state !== 'ok');
+        if (!quiet) showRelayToast('تست پینگ · ' + name, test.text, test.state !== 'ok');
         paintPeerTest(name);
     }
 
@@ -4568,7 +4621,7 @@
                         handshakeOk: health.ok
                     };
                 })
-                .sort((a, b) => Number(a.disabled) - Number(b.disabled) || peerLabel(a).localeCompare(peerLabel(b), 'en'));
+                .sort(comparePeersByPing);
 
             const dt = prevTimestamp ? (now - prevTimestamp) / 1000 : 0;
             const usableDt = dt > 0 && dt <= SPEED_GAP_MAX;
@@ -5768,10 +5821,11 @@
     document.addEventListener('keydown', (event) => {
         if (event.key !== 'Escape') return;
         const pickerOpen = Boolean(document.querySelector('.peer-picker[data-open], #relayCountryPicker[open]'));
-        const modalOpen = Boolean(document.querySelector('dialog[open], #diagModal:not([hidden]), #clientPingModal:not([hidden])'));
+        const modalOpen = Boolean(document.querySelector('dialog[open], #diagModal:not([hidden]), #clientPingModal:not([hidden]), #relayChangeModal:not([hidden])'));
         closeAllPickers();
         closeDiagnoseModal();
         closeClientPingModal();
+        closeRelayChangeModal();
         if (!pickerOpen && !modalOpen && relaySelectionMode) cancelRelaySelection();
     });
     document.getElementById('openDiagFromTabBtn').addEventListener('click', () => openDiagnoseModal(''));
@@ -6470,6 +6524,7 @@
             restart: 'M20 7v5h-5 M20 12a8 8 0 1 0-2 5',
             remove: 'M3 6h18 M9 6V3h6v3 M6 6l1 15h10l1-15 M10 10v7 M14 10v7',
             edit: 'M4 16l-1 5 5-1L21 7l-4-4z M14 6l4 4',
+            swap: 'M7 7h12l-3.5-3.5 M17 17H5l3.5 3.5',
             traffic: 'M4 8h16 M15 3l5 5-5 5 M20 16H4 M9 11l-5 5 5 5',
             install: 'M12 3v12 M7 10l5 5 5-5 M4 16v5h16v-5',
             extract: 'M4 4h6v6H4z M14 4h6v6h-6z M4 14h6v6H4z M14 14h6v6h-6z'
@@ -6629,6 +6684,89 @@
             || a.country.localeCompare(b.country) || a.city.localeCompare(b.city);
     }
 
+    function relayCardAvailability(card) {
+        if (!card.iface || isTrue(card.iface.disabled)) return 2;
+        const test = peerTests.get(card.iface.name);
+        if (test?.state === 'fail' || test?.state === 'error') return 1;
+        if (test?.state === 'ok') return 0;
+        const model = wgCatalog.find(item => item.name === card.iface.name);
+        return model?.health?.ok ? 0 : 1;
+    }
+
+    function compareRelayCards(a, b) {
+        const availability = relayCardAvailability(a) - relayCardAvailability(b);
+        if (availability) return availability;
+        const aPing = a.iface ? lastPeerPing(a.iface.name) : null;
+        const bPing = b.iface ? lastPeerPing(b.iface.name) : null;
+        if ((aPing == null) !== (bPing == null)) return aPing == null ? 1 : -1;
+        if (aPing != null && bPing != null && aPing !== bPing) return bPing - aPing;
+        return a.city.city.localeCompare(b.city.city, 'en')
+            || (a.iface?.name || '').localeCompare(b.iface?.name || '', 'en');
+    }
+
+    function markRelayExtract(cards) {
+        const groups = new Map();
+        for (const card of cards) {
+            const key = card.city.key;
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key).push(card);
+        }
+        for (const group of groups.values()) {
+            const city = group[0].city;
+            const active = city.relays.filter(relay => relay.ip && relay.active !== false);
+            const free = city.relays.filter(relayIsFree);
+            for (const card of group) card.extract = false;
+            if (!installedRelays || !free.length || active.length < 2) continue;
+            const hostName = city.relays
+                .map(relay => city.installed.find(iface => iface.name === 'mv-wg-' + relay.name || iface.name === relay.name)?.name)
+                .find(name => name && group.some(card => card.iface?.name === name));
+            const host = hostName
+                ? group.find(card => card.iface?.name === hostName)
+                : group.find(card => !card.iface) || group[0];
+            if (host) host.extract = true;
+        }
+    }
+
+    let relayChangeApply = null;
+
+    function openRelayChangeModal({ title, hint, current, options, onApply }) {
+        relayChangeApply = onApply;
+        document.getElementById('relayChangeTitle').textContent = title;
+        document.getElementById('relayChangeHint').textContent = hint || '';
+        const list = document.getElementById('relayChangeOptions');
+        list.replaceChildren();
+        for (const option of options) {
+            const label = document.createElement('label');
+            label.className = 'relay-change-option';
+            const input = document.createElement('input');
+            input.type = 'radio';
+            input.name = 'relayChangeChoice';
+            input.value = option.value;
+            input.checked = option.value === current;
+            const text = document.createElement('span');
+            text.textContent = option.text;
+            label.append(input, text);
+            list.append(label);
+        }
+        const checked = list.querySelector('input:checked') || list.querySelector('input');
+        if (checked) checked.checked = true;
+        document.getElementById('relayChangeModal').hidden = false;
+        checked?.focus();
+    }
+
+    function closeRelayChangeModal() {
+        const modal = document.getElementById('relayChangeModal');
+        if (modal) modal.hidden = true;
+        relayChangeApply = null;
+    }
+
+    function applyRelayChangeModal() {
+        const value = document.querySelector('#relayChangeOptions input:checked')?.value || '';
+        const apply = relayChangeApply;
+        closeRelayChangeModal();
+        if (apply) apply(value);
+    }
+
     function renderRelayManagement() {
         relayPingOrderDirty = false;
         const query = document.getElementById('relayCatalogSearch').value.trim().toLowerCase();
@@ -6668,6 +6806,8 @@
             }
             if (filter !== 'installed' && free.length) viewCards.push({ city, iface: null, free });
         }
+        viewCards.sort(compareRelayCards);
+        markRelayExtract(viewCards);
         const pages = Math.max(1, Math.ceil(viewCards.length / relayPageSize));
         relayPage = Math.min(relayPage, pages - 1);
         document.getElementById('relayPageCount').textContent = viewCards.length
@@ -6711,7 +6851,7 @@
             const peer = buildCityPeer(city.city.relays, city.iface);
             card.append(peer);
             bindRelaySelection(card, city.iface, 'details');
-            if (!city.iface && installedRelays && city.free.length > 1) {
+            if (city.extract) {
                 peer.querySelector('.relay-actions').append(relayIcon('استخراج شهر', 'extract', 'success', () => {
                     const pending = city.city.relays.filter(relayIsFree);
                     if (!pending.length) return undefined;
@@ -6785,38 +6925,43 @@
                 }, relayBusy, iface.name));
         }
         if (installedRelays && choices.length && (!iface || peer)) {
-            const edit = document.createElement('div');
-            edit.className = 'relay-edit';
-            edit.hidden = true;
-            const currentAvailable = choices.some(relay => relay.name === current?.name);
-            let selected = currentAvailable ? current.name : (iface ? '' : choices[0].name);
             const options = choices.map(relay => ({
                 value: relay.name,
-                code: relay.name.split('-')[0],
                 text: [relay.city, relay.name, relay.ip].filter(Boolean).join(' · ')
             }));
-            if (iface && !currentAvailable) options.unshift({ value: '', code: '', text: 'انتخاب رلهٔ جایگزین', placeholder: true });
-            const picker = buildRelayPicker(options, selected, 'انتخاب رلهٔ شهر', value => {
-                if (!value || value === selected) return;
-                selected = value;
-                if (iface) {
-                    void runIconAction(editButton, () => mutateRelay(() => changeCityRelay(iface, value)));
-                } else {
-                    title.textContent = value;
-                    endpoint.textContent = choices.find(relay => relay.name === value).ip;
+            if (iface) {
+                if (choices.some(relay => relay.name !== current?.name)) {
+                    actions.append(relayIcon('تغییر رله', 'swap', 'info', () => {
+                        openRelayChangeModal({
+                            title: 'تغییر رله',
+                            hint: iface.name,
+                            current: current?.name || choices[0].name,
+                            options,
+                            onApply: value => {
+                                if (!value || value === current?.name) return undefined;
+                                return mutateRelay(() => changeCityRelay(iface, value));
+                            }
+                        });
+                    }, relayBusy, iface.name));
                 }
-            });
-            edit.append(picker);
-            card.append(edit);
-            const editButton = relayIcon(iface ? 'ویرایش رله' : 'انتخاب رله', 'edit', 'info', () => {
-                edit.hidden = !edit.hidden;
-                editButton.setAttribute('aria-expanded', String(!edit.hidden));
-                picker.open = !edit.hidden;
-                if (!edit.hidden) picker.querySelector('summary').focus();
-            }, relayBusy, iface?.name);
-            editButton.setAttribute('aria-expanded', 'false');
-            actions.append(editButton);
-            if (!iface) {
+            } else {
+                let selected = choices[0].name;
+                actions.append(relayIcon('انتخاب رله', 'swap', 'info', () => {
+                    openRelayChangeModal({
+                        title: 'انتخاب رله',
+                        hint: 'رله‌ای که به عنوان نود نصب می‌شود',
+                        current: selected,
+                        options,
+                        onApply: value => {
+                            const relay = choices.find(item => item.name === value);
+                            if (!relay) return;
+                            selected = relay.name;
+                            title.textContent = relay.name;
+                            title.dir = 'ltr';
+                            endpoint.textContent = relay.ip;
+                        }
+                    });
+                }, relayBusy, 'pick:' + relayCityKey(relays[0])));
                 actions.append(relayIcon('نصب رلهٔ انتخاب‌شده', 'install', 'success',
                     () => mutateRelay(() => installCatalogRelay(selected)), relayBusy, 'city:' + relayCityKey(relays[0])));
             }
@@ -7010,7 +7155,7 @@
         const existingPeers = peers.filter(peer => peer.interface === iface);
         if (existingPeers.length && (existingPeers.length !== 1
             || existingPeers[0]['endpoint-address'] !== relay.ip || existingPeers[0]['public-key'] !== relay.publicKey)) {
-            throw new Error('این اینترفیس از قبل Peer دیگری دارد. از گزینهٔ ویرایش رله استفاده کنید.');
+            throw new Error('این اینترفیس از قبل Peer دیگری دارد. از گزینهٔ تغییر رله استفاده کنید.');
         }
         await ensureCatalogEndpointRoute(relay, iface, interfaces, peers, routes);
         if (!interfaces.some(item => item.name === iface)) {
@@ -7038,6 +7183,11 @@
         }
         await ensurePeerDataPath(iface);
         await setPeerDisabledState(iface, false);
+        try {
+            await testPeerPath(iface, null, null, null, { quiet: true, endpointAddress: relay.ip });
+        } catch {
+            // A failed ping must not roll back a node that was already created.
+        }
     }
 
     async function manageMullvadPeers(onProgress, operation = 'delete', selected = null) {
@@ -7425,6 +7575,12 @@
     document.getElementById('relayPageSize').addEventListener('change', event => {
         relayPageSize = Number(event.currentTarget.value);
         resetRelayPage();
+    });
+    document.getElementById('relayChangeClose').addEventListener('click', closeRelayChangeModal);
+    document.getElementById('relayChangeCancel').addEventListener('click', closeRelayChangeModal);
+    document.getElementById('relayChangeApply').addEventListener('click', applyRelayChangeModal);
+    document.getElementById('relayChangeModal').addEventListener('click', event => {
+        if (event.target.id === 'relayChangeModal') closeRelayChangeModal();
     });
     document.getElementById('relayCountryPicker').addEventListener('keydown', event => {
         if (event.key !== 'Escape') return;

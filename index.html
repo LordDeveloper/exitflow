@@ -750,6 +750,7 @@
         .relay-icon svg { width: 17px; height: 17px; }
         .relay-board-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
         .relay-board-head p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+        .relay-board-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
         .relay-board-count { padding: 4px 10px; border-radius: 999px; background: #241c1e; color: #f3e8ea; font-size: 12px; font-weight: 700; white-space: nowrap; }
         .relay-select-bar {
             position: sticky; top: 8px; z-index: 20;
@@ -964,9 +965,12 @@
             <div class="relay-board-head">
                 <div>
                     <h2>لیست پیرها</h2>
-                    <p>برای انتخاب چندتایی، روی یک پیر دوبار کلیک کنید.</p>
+                    <p>مرتب‌سازی بر اساس پینگ · برای انتخاب چندتایی دوبار کلیک کنید.</p>
                 </div>
-                <span id="relayBoardCount" class="relay-board-count">۰ پیر</span>
+                <div class="relay-board-tools">
+                    <button type="button" id="relayPingAllBtn" class="info compact">پینگ همگانی</button>
+                    <span id="relayBoardCount" class="relay-board-count">۰ پیر</span>
+                </div>
             </div>
             <div class="relay-body">
                 <section class="relay-settings-panel" aria-label="تنظیمات خروجی">
@@ -2399,7 +2403,8 @@
             if (aPing == null && bPing == null) return peerLabel(a).localeCompare(peerLabel(b), 'en');
             return aPing == null ? 1 : -1;
         }
-        return (bPing - aPing) || peerLabel(a).localeCompare(peerLabel(b), 'en');
+        // Lower ping first.
+        return (aPing - bPing) || peerLabel(a).localeCompare(peerLabel(b), 'en');
     }
 
     function peerMeta(wg) {
@@ -6066,9 +6071,9 @@
     }
 
     function compareRelayCities(a, b) {
-        const aPing = Number.isFinite(a.ping) ? a.ping : -Infinity;
-        const bPing = Number.isFinite(b.ping) ? b.ping : -Infinity;
-        return (bPing - aPing)
+        const aPing = Number.isFinite(a.ping) ? a.ping : Infinity;
+        const bPing = Number.isFinite(b.ping) ? b.ping : Infinity;
+        return (aPing - bPing)
             || Number(Boolean(b.installed.length)) - Number(Boolean(a.installed.length))
             || a.country.localeCompare(b.country) || a.city.localeCompare(b.city);
     }
@@ -6083,14 +6088,56 @@
     }
 
     function compareRelayCards(a, b) {
+        // Uninstalled cards stay at the end; among installed peers sort by ping.
+        if (Boolean(a.iface) !== Boolean(b.iface)) return a.iface ? -1 : 1;
+        if (!a.iface) {
+            return a.city.city.localeCompare(b.city.city, 'en')
+                || a.city.country.localeCompare(b.city.country, 'en');
+        }
         const availability = relayCardAvailability(a) - relayCardAvailability(b);
         if (availability) return availability;
-        const aPing = a.iface ? lastPeerPing(a.iface.name) : null;
-        const bPing = b.iface ? lastPeerPing(b.iface.name) : null;
+        const aPing = lastPeerPing(a.iface.name);
+        const bPing = lastPeerPing(b.iface.name);
         if ((aPing == null) !== (bPing == null)) return aPing == null ? 1 : -1;
-        if (aPing != null && bPing != null && aPing !== bPing) return bPing - aPing;
+        if (aPing != null && bPing != null && aPing !== bPing) return aPing - bPing;
         return a.city.city.localeCompare(b.city.city, 'en')
             || (a.iface?.name || '').localeCompare(b.iface?.name || '', 'en');
+    }
+
+    let pingAllBusy = false;
+
+    async function pingAllRelays() {
+        if (!monitoring) {
+            setStatus('اول به روتر متصل شو.', true);
+            return;
+        }
+        if (pingAllBusy || relayBusy) return;
+        const peers = [...(installedRelays?.values() || [])].filter((iface) => (
+            String(iface.name || '').startsWith('mv-wg-') && !isTrue(iface.disabled)
+        ));
+        if (!peers.length) {
+            setStatus('پیر فعالی برای پینگ همگانی نیست.', true);
+            return;
+        }
+        pingAllBusy = true;
+        const button = document.getElementById('relayPingAllBtn');
+        if (button) button.disabled = true;
+        let done = 0;
+        relayStatus.textContent = `پینگ همگانی: ۰ از ${peers.length}`;
+        try {
+            for (const iface of peers) {
+                relayStatus.textContent = `پینگ همگانی: ${done + 1} از ${peers.length} · ${iface.name}`;
+                await testPeerPath(iface.name, null, null, null, { quiet: true });
+                done += 1;
+            }
+            relayPingOrderDirty = true;
+            renderRelayManagement();
+            relayStatus.textContent = `پینگ همگانی تمام شد · ${done} نود`;
+            showRelayToast('پینگ همگانی', `${done} نود بررسی شد`);
+        } finally {
+            pingAllBusy = false;
+            if (button) button.disabled = false;
+        }
     }
 
     function cityHostIface(city, installed) {
@@ -6219,6 +6266,8 @@
             ? `صفحهٔ ${relayPage + 1} از ${pages} · ${viewCards.length} کارت` : 'کارتی برای نمایش نیست';
         const installedCount = [...(installedRelays?.values() || [])].filter(iface => iface.name?.startsWith('mv-wg-')).length;
         document.getElementById('relayBoardCount').textContent = installedCount + ' پیر';
+        const pingAllBtn = document.getElementById('relayPingAllBtn');
+        if (pingAllBtn) pingAllBtn.disabled = !monitoring || relayBusy || pingAllBusy || installedCount === 0;
         document.getElementById('relayPagePrev').disabled = relayPage === 0;
         document.getElementById('relayPageNext').disabled = relayPage >= pages - 1;
         const numbers = document.getElementById('relayPageNumbers');
@@ -7211,6 +7260,7 @@
     document.getElementById('relayRouterSync').addEventListener('click', () => void runRelayAction(async () => {
         await loadInstalledRelays();
     }));
+    document.getElementById('relayPingAllBtn').addEventListener('click', () => void pingAllRelays());
     document.getElementById('relayCatalogSearch').addEventListener('input', resetRelayPage);
     document.getElementById('relayPagePrev').addEventListener('click', () => {
         relayPage = Math.max(0, relayPage - 1);

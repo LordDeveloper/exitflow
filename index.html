@@ -513,25 +513,30 @@
         .credential-form { display: grid; gap: 12px; margin: 16px 0 18px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 14px; background: #181b20; }
         .credential-form textarea { width: 100%; min-height: 150px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.5; }
         .credential-form-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-        .credential-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+        .credential-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
         .credential-cards:empty::before {
             content: attr(data-empty);
             display: block;
             grid-column: 1 / -1;
-            padding: 18px;
+            padding: 14px;
             border: 1px dashed var(--border);
-            border-radius: 12px;
+            border-radius: 10px;
             color: var(--muted);
             text-align: center;
+            font-size: 12px;
         }
-        .credential-card { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--border); border-radius: 14px; background: #171b20; min-width: 0; }
+        .credential-card { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: #171b20; min-width: 0; }
         .credential-card.is-full { border-color: #6e353c; background: #24181a; }
-        .credential-card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
-        .credential-card-head h3 { margin: 0; font-size: 15px; overflow-wrap: anywhere; }
-        .credential-card-meta { display: grid; gap: 4px; color: var(--muted); font-size: 12px; }
-        .credential-card-meta strong { color: var(--text); font-size: 13px; direction: ltr; unicode-bidi: isolate; }
-        .credential-card-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-        .credential-progress { height: 8px; border-radius: 999px; background: #101418; overflow: hidden; border: 1px solid var(--border); }
+        .credential-card-head { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+        .credential-card-head h3 { margin: 0; font-size: 13px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+        .credential-card-count { flex: none; padding: 2px 7px; border-radius: 999px; background: #241c1e; color: #f3e8ea; font-size: 11px; font-weight: 700; white-space: nowrap; }
+        .credential-card-meta { display: grid; gap: 2px; color: var(--muted); font-size: 11px; line-height: 1.35; }
+        .credential-card-meta strong { color: var(--text); font-size: 11px; direction: ltr; unicode-bidi: isolate; overflow-wrap: anywhere; font-weight: 600; }
+        .credential-card-footer { display: flex; align-items: center; gap: 6px; }
+        .credential-card-actions { display: inline-flex; gap: 4px; margin-inline-start: auto; }
+        .credential-card-actions .relay-icon { width: 28px; height: 28px; border-radius: 8px; }
+        .credential-card-actions .relay-icon svg { width: 14px; height: 14px; }
+        .credential-progress { flex: 1; height: 5px; border-radius: 999px; background: #101418; overflow: hidden; border: 1px solid var(--border); }
         .credential-progress > span { display: block; height: 100%; background: #3d6b58; }
         .credential-card.is-full .credential-progress > span { background: #a94a55; }
         .relay-settings-panel > h3 { margin: 0; font-size: 15px; }
@@ -6812,15 +6817,18 @@
             head.className = 'credential-card-head';
             const title = document.createElement('h3');
             title.textContent = item.name || ('کلید #' + item.id);
+            title.title = title.textContent;
             const badge = document.createElement('span');
-            badge.className = 'relay-board-count';
-            badge.textContent = used + ' / ' + limit + ' peer';
+            badge.className = 'credential-card-count';
+            badge.textContent = used + '/' + limit;
+            badge.title = used + ' peer از ' + limit;
             head.append(title, badge);
             const meta = document.createElement('div');
             meta.className = 'credential-card-meta';
-            meta.innerHTML = `<span>آدرس تونل</span><strong>${esc(item.address)}</strong>`
-                + (item.dns ? `<span>DNS</span><strong>${esc(item.dns)}</strong>` : '')
-                + `<span>${used ? used + ' نود به این کلید وصل است' : 'هنوز نودی به این کلید وصل نیست'}</span>`;
+            meta.innerHTML = `<strong title="${esc(item.address)}">${esc(item.address)}</strong>`
+                + (item.dns ? `<span dir="ltr">${esc(item.dns)}</span>` : '');
+            const footer = document.createElement('div');
+            footer.className = 'credential-card-footer';
             const bar = document.createElement('div');
             bar.className = 'credential-progress';
             bar.title = used + ' از ' + limit;
@@ -6829,24 +6837,16 @@
             bar.append(fill);
             const actions = document.createElement('div');
             actions.className = 'credential-card-actions';
-            const editBtn = document.createElement('button');
-            editBtn.type = 'button';
-            editBtn.className = 'ghost compact';
-            editBtn.textContent = 'ویرایش';
-            editBtn.addEventListener('click', () => beginCredentialEdit(item));
-            const deleteBtn = document.createElement('button');
-            deleteBtn.type = 'button';
-            deleteBtn.className = 'danger compact';
-            deleteBtn.textContent = 'حذف';
-            deleteBtn.disabled = used > 0;
-            deleteBtn.title = used > 0 ? 'اول peerهای این کلید را حذف کنید' : 'حذف credential';
-            deleteBtn.addEventListener('click', () => {
-                if (used > 0) return;
-                if (!window.confirm('این کلید Mullvad حذف شود؟')) return;
-                void saveCredentialAction({ action: 'delete', id: item.id });
-            });
-            actions.append(editBtn, deleteBtn);
-            card.append(head, meta, bar, actions);
+            actions.append(
+                relayIcon('ویرایش', 'edit', 'info', () => beginCredentialEdit(item)),
+                relayIcon('حذف', 'remove', 'danger', () => {
+                    if (used > 0) return;
+                    if (!window.confirm('این کلید Mullvad حذف شود؟')) return;
+                    void saveCredentialAction({ action: 'delete', id: item.id });
+                }, used > 0)
+            );
+            footer.append(bar, actions);
+            card.append(head, meta, footer);
             fragment.append(card);
         }
         host.replaceChildren(fragment);

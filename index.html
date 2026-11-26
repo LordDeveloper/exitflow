@@ -861,7 +861,7 @@
     <header class="page-head">
         <div>
             <h1>داشبورد Mullvad روی میکروتیک</h1>
-            <p>تونل دوتایی WireGuard · مسیر Mullvad از exit و mv2tr · کلاینت‌ها روی mv-wg-*</p>
+            <p>تونل دوتایی WireGuard · مسیر Mullvad از exit و mv2tr · کلاینت‌ها روی mv-wg-* یا exit</p>
         </div>
         <div class="head-right">
             <div class="user-bar" id="userBar" hidden>
@@ -1446,6 +1446,19 @@
         return rule['new-routing-mark'] || rule['routing-mark'] || '';
     }
 
+    function isExitIfaceName(name) {
+        return ['exit', 'toir', 'totr'].includes(String(name || '').toLowerCase());
+    }
+
+    function isClientRouteTarget(name) {
+        const value = String(name || '');
+        return /^mv-wg-[A-Za-z0-9._-]+$/.test(value) || isExitIfaceName(value);
+    }
+
+    function isClientAddressList(list) {
+        return isClientRouteTarget(list);
+    }
+
     function isMainTable(rule) {
         return (rule.table || rule['routing-table'] || '') === 'main';
     }
@@ -1467,6 +1480,10 @@
     }
 
     function peerLabel(wg) {
+        if (isExitIfaceName(wg?.name)) {
+            const comment = String(wg.comment || '').trim();
+            return comment || ('تونل خروجی · ' + wg.name);
+        }
         const comment = String(wg.comment || '').trim();
         if (!comment) return wg.name;
         return `${comment} — ${wg.name}`;
@@ -2102,30 +2119,35 @@
         const tunnelPeers = peers.filter((peer) => peer.interface === peerName);
         const tunnel = handshakeInfo(tunnelPeers);
         if (!tunnel.ok) {
-            warnings.push(`${peerName}: ${tunnel.text}. TX بدون RX یعنی هندشیک از exit جواب نمی‌گیرد؛ تا زنده نشود کلاینت اینترنت ندارد`);
+            warnings.push(isExitIfaceName(peerName)
+                ? `${peerName}: ${tunnel.text}. تا تونل exit زنده نشود کلاینت اینترنت ندارد`
+                : `${peerName}: ${tunnel.text}. TX بدون RX یعنی هندشیک از exit جواب نمی‌گیرد؛ تا زنده نشود کلاینت اینترنت ندارد`);
         }
 
         const endpointIp = ipOnly(endpointOf(tunnelPeers.find((peer) => endpointOf(peer)) || null));
         // Catalog installs use main-table /32 via exit. Mixing those IPs into MVIPs/mv2tr
         // breaks handshakes once many peers share the same Mullvad key through exit.
-        const endpointViaExit = isIpv4(endpointIp) && routes.some((route) => route['routing-table'] === 'main'
-            && route.gateway === 'exit'
-            && normPrefix(route['dst-address']) === endpointIp + '/32'
-            && !isTrue(route.disabled));
-        const usesMvips = mangles.some((rule) => markOf(rule) === 'mv2tr' && rule['dst-address-list'] === 'MVIPs' && !isTrue(rule.disabled));
-        if (usesMvips && isIpv4(endpointIp) && !endpointViaExit) {
-            const listed = asList(await apiFetch('/ip/firewall/address-list?list=MVIPs&address=' + encodeURIComponent(endpointIp)));
-            const hit = listed.some((row) => sameIp(row.address, endpointIp) && !isTrue(row.disabled));
-            if (!hit) {
-                try {
-                    await apiFetch('/ip/firewall/address-list', 'PUT', {
-                        list: 'MVIPs',
-                        address: endpointIp,
-                        comment: 'endpoint ' + peerName
-                    });
-                    notes.push('آدرس ' + endpointIp + ' به MVIPs اضافه شد تا هندشیک از exit برود');
-                } catch (err) {
-                    if (!/already/i.test(err.message)) throw err;
+        // Exit's own endpoint must stay on the ISP path — never mark it for mv2tr/exit.
+        if (!isExitIfaceName(peerName)) {
+            const endpointViaExit = isIpv4(endpointIp) && routes.some((route) => route['routing-table'] === 'main'
+                && route.gateway === 'exit'
+                && normPrefix(route['dst-address']) === endpointIp + '/32'
+                && !isTrue(route.disabled));
+            const usesMvips = mangles.some((rule) => markOf(rule) === 'mv2tr' && rule['dst-address-list'] === 'MVIPs' && !isTrue(rule.disabled));
+            if (usesMvips && isIpv4(endpointIp) && !endpointViaExit) {
+                const listed = asList(await apiFetch('/ip/firewall/address-list?list=MVIPs&address=' + encodeURIComponent(endpointIp)));
+                const hit = listed.some((row) => sameIp(row.address, endpointIp) && !isTrue(row.disabled));
+                if (!hit) {
+                    try {
+                        await apiFetch('/ip/firewall/address-list', 'PUT', {
+                            list: 'MVIPs',
+                            address: endpointIp,
+                            comment: 'endpoint ' + peerName
+                        });
+                        notes.push('آدرس ' + endpointIp + ' به MVIPs اضافه شد تا هندشیک از exit برود');
+                    } catch (err) {
+                        if (!/already/i.test(err.message)) throw err;
+                    }
                 }
             }
         }
@@ -2260,7 +2282,7 @@
     }
 
     async function assignClient(ip, targetList, host, leaseId, isDynamic) {
-        if (targetList && !/^mv-wg-[A-Za-z0-9._-]+$/.test(targetList)) {
+        if (targetList && !isClientRouteTarget(targetList)) {
             throw new Error('نام Peer نامعتبر است');
         }
         const notes = [];
@@ -2285,7 +2307,7 @@
 
         const path = '/ip/firewall/address-list';
         const readAssignments = async () => (await apiList(path + '?.proplist=.id,list,address,disabled'))
-            .filter(row => row['.id'] && String(row.list || '').startsWith('mv-wg-') && sameIp(row.address, ip));
+            .filter(row => row['.id'] && isClientAddressList(row.list) && sameIp(row.address, ip));
         try {
             let mine = await readAssignments();
             let keep = targetList && mine.find(row => row.list === targetList && !isTrue(row.disabled));
@@ -2429,6 +2451,9 @@
         if (wg) {
             setText(picker.querySelector('.peer-picker-name'), peerLabel(wg));
             setText(picker.querySelector('.peer-picker-meta'), peerMeta(wg));
+        } else if (isExitIfaceName(value)) {
+            setText(picker.querySelector('.peer-picker-name'), 'تونل خروجی · ' + value);
+            setText(picker.querySelector('.peer-picker-meta'), 'از طریق exit');
         } else if (value) {
             setText(picker.querySelector('.peer-picker-name'), value);
             setText(picker.querySelector('.peer-picker-meta'), 'اطلاعات Peer در فهرست فعلی موجود نیست');
@@ -2443,7 +2468,10 @@
     }
 
     function pickerPeerOptions() {
-        return wgInterfaces.filter(peer => !peer.disabled).slice().sort(comparePeersByPing);
+        const peers = wgInterfaces.filter(peer => !peer.disabled).slice().sort(comparePeersByPing);
+        const exits = peers.filter((peer) => isExitIfaceName(peer.name));
+        const relays = peers.filter((peer) => !isExitIfaceName(peer.name));
+        return exits.concat(relays);
     }
 
     function fillPickerList(picker, current) {
@@ -2467,9 +2495,11 @@
             const handshake = document.createElement('span');
             handshake.className = 'peer-option-hs';
             handshake.textContent = peerMeta(wg);
-            const country = /^mv-wg-([a-z]{2})-/.exec(wg.name);
-            const flag = country && relayFlag(country[1]);
-            if (flag) name.prepend(flag);
+            if (!isExitIfaceName(wg.name)) {
+                const country = /^mv-wg-([a-z]{2})-/.exec(wg.name);
+                const flag = country && relayFlag(country[1]);
+                if (flag) name.prepend(flag);
+            }
             option.appendChild(name);
             option.appendChild(handshake);
             fragment.appendChild(option);
@@ -2487,7 +2517,8 @@
                 return;
             }
             const wg = byName.get(option.dataset.peer);
-            option.hidden = !wg || !matchesFilter(optionHaystack(wg) + ' ' + peerMeta(wg), query);
+            const exitHay = isExitIfaceName(option.dataset.peer) ? 'exit تونل خروجی toIR toTR' : '';
+            option.hidden = !wg || !matchesFilter(optionHaystack(wg) + ' ' + peerMeta(wg) + ' ' + exitHay, query);
         });
         let empty = picker.querySelector('.peer-picker-empty');
         const visible = picker.querySelector('.peer-option:not([hidden])');
@@ -2835,8 +2866,9 @@
 
     function badgeHtml(lists) {
         if (!lists.length) return '<span class="badge badge-direct">اینترنت عادی</span>';
-        if (lists.length === 1) return `<span class="badge badge-vpn">${esc(lists[0])}</span>`;
-        return `<span class="badge badge-warn">${esc(lists.join(' + '))}</span>`;
+        const labels = lists.map((name) => isExitIfaceName(name) ? ('تونل خروجی · ' + name) : name);
+        if (labels.length === 1) return `<span class="badge badge-vpn">${esc(labels[0])}</span>`;
+        return `<span class="badge badge-warn">${esc(labels.join(' + '))}</span>`;
     }
 
     function buildClientRow() {
@@ -4436,7 +4468,7 @@
                 apiList('/ip/firewall/address-list?.proplist=.id,list,address,comment,disabled')
             ]);
 
-            addressLists = addrLists.filter((row) => row.list && String(row.list).startsWith('mv-wg-') && !isTrue(row.disabled));
+            addressLists = addrLists.filter((row) => row.list && isClientAddressList(row.list) && !isTrue(row.disabled));
 
             const ifaceByName = new Map();
             allIfaces.forEach((iface) => { if (iface.name) ifaceByName.set(iface.name, iface); });
@@ -4448,7 +4480,7 @@
             });
 
             wgInterfaces = wgList
-                .filter((item) => item.name && String(item.name).startsWith('mv-wg-'))
+                .filter((item) => item.name && (String(item.name).startsWith('mv-wg-') || isExitIfaceName(item.name)))
                 .map((item) => {
                     const iface = ifaceByName.get(item.name) || {};
                     const peers = peersByIface.get(item.name) || [];
@@ -4498,8 +4530,11 @@
                 const mark = markOf(rule);
                 if (mark === 'mv2tr') upstreamMangleBytes += Number(rule.bytes) || 0;
                 const list = rule['src-address-list'] || '';
-                const key = String(mark).startsWith('mv-wg-') ? mark : (String(list).startsWith('mv-wg-') ? list : '');
+                const key = isClientRouteTarget(mark) ? mark
+                    : (isClientAddressList(list) ? list : '');
                 if (!key || mangleBytes.has(rule['.id'])) return;
+                // Exit iface traffic for Mullvad handshakes stays on mv2tr; client-via-exit uses mark=exit.
+                if (isExitIfaceName(key) && mark === 'mv2tr') return;
                 mangleBytes.set(rule['.id'], { key, bytes: Number(rule.bytes) || 0 });
             });
             const mangleByPeer = new Map();
@@ -4520,11 +4555,17 @@
                     const comment = String(iface.comment || item.comment || '').trim();
                     return {
                         name: item.name,
-                        comment: comment ? describePeer(item.name, comment) : (String(item.name).startsWith('mv-wg-') ? describePeer(item.name, '') : 'اینترفیس WireGuard'),
+                        comment: comment
+                            ? describePeer(item.name, comment)
+                            : (isExitIfaceName(item.name)
+                                ? ('تونل خروجی · ' + item.name)
+                                : (String(item.name).startsWith('mv-wg-') ? describePeer(item.name, '') : 'اینترفیس WireGuard')),
                         disabled,
                         health,
                         stats,
-                        mangleBytes: item.name === 'exit' ? upstreamMangleBytes : (mangleByPeer.get(item.name) || 0),
+                        mangleBytes: isExitIfaceName(item.name)
+                            ? (mangleByPeer.get(item.name) || 0) + upstreamMangleBytes
+                            : (mangleByPeer.get(item.name) || 0),
                         clients: clientsForPeer(item.name)
                     };
                 });

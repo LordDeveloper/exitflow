@@ -793,7 +793,7 @@
 
         .client-filters { margin: 12px 0 16px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 10px; }
         .client-filters summary { cursor: pointer; font-weight: 700; }
-        .client-filter-fields { display: grid; grid-template-columns: minmax(0, 2fr) 1fr 1fr auto; gap: 10px; align-items: end; margin-top: 10px; }
+        .client-filter-fields { display: grid; grid-template-columns: minmax(0, 2fr) 1fr auto auto; gap: 10px; align-items: end; margin-top: 10px; }
         .client-filter-fields > label:not(.switch) { display: grid; gap: 4px; color: var(--muted); font-size: 12px; }
         .client-cards > .empty { grid-column: 1 / -1; }
         .client-card { display: flex; flex-direction: column; gap: 10px; padding: 13px; min-width: 0; background: #142032; border: 1px solid var(--border); border-radius: 12px; }
@@ -933,12 +933,6 @@
                     <label>جست‌وجو
                         <input id="clientSearch" type="search" placeholder="نام، IP، MAC یا نام peer">
                     </label>
-                    <label>نوع دستگاه
-                        <select id="clientSourceFilter">
-                            <option value="dynamic">DHCP پویا (D)</option>
-                            <option value="">همهٔ دستگاه‌ها</option>
-                        </select>
-                    </label>
                     <label>مسیر اینترنت
                         <select id="clientRouteFilter">
                             <option value="">همه</option><option value="vpn">Mullvad</option><option value="direct">اینترنت عادی</option>
@@ -947,7 +941,7 @@
                     <label class="switch" for="showOffline">
                         <input type="checkbox" id="showOffline">
                         <span class="switch-ui" aria-hidden="true"></span>
-                        <span>نمایش دستگاه‌های بدون وضعیت تأییدشده</span>
+                        <span>نمایش دستگاه‌های بدون کانکشن فعال</span>
                     </label>
                     <label class="switch" for="showWired">
                         <input type="checkbox" id="showWired">
@@ -2636,15 +2630,12 @@
     function visibleClientRows() {
         const query = document.getElementById('clientSearch').value;
         const route = document.getElementById('clientRouteFilter').value;
-        const source = document.getElementById('clientSourceFilter').value;
         const showOffline = document.getElementById('showOffline').checked;
         return latestClientRows.filter(row => {
-            const dynamicLease = row.source === 'dhcp' && row.dynamic;
-            if (source === 'dynamic' && !dynamicLease) return false;
             const lists = listsForIp(row.ip);
             if (!showWiredEnabled() && row.source === 'arp' && !lists.length) return false;
             if (route && (lists.length ? 'vpn' : 'direct') !== route) return false;
-            if (!showOffline && row.offline && !dynamicLease) return false;
+            if (!showOffline && row.offline) return false;
             return matchesFilter([clientDisplayName(row), row.host, row.ip, row.mac, row.kind, ...lists].join(' '), query);
         });
     }
@@ -4375,23 +4366,16 @@
             }
             return row;
         };
+        // Attribute connected LAN clients from connection source addresses only.
         connections.forEach((row) => {
             const src = ipOnly(row['src-address']);
-            const dst = ipOnly(row['dst-address']);
+            if (!src || !isIpv4(src) || !isPrivateLan(src)) return;
             const orig = Number(row['orig-bytes']) || 0;
             const repl = Number(row['repl-bytes']) || 0;
-            if (src && isIpv4(src)) {
-                const item = touch(src);
-                item.ul += orig;
-                item.dl += repl;
-                item.count += 1;
-            }
-            if (dst && dst !== src && isIpv4(dst)) {
-                const item = touch(dst);
-                item.dl += orig;
-                item.ul += repl;
-                item.count += 1;
-            }
+            const item = touch(src);
+            item.ul += orig;
+            item.dl += repl;
+            item.count += 1;
         });
         return map;
     }
@@ -4607,65 +4591,72 @@
                 if (!sessionPorts.has(dst.port) || !routerIps.has(dst.ip)) return;
                 if (isPrivateLan(src) && !routerIps.has(src)) sessionIps.add(src);
             });
-            const lanClients = new Map();
+            const leaseByIp = new Map();
             dhcpLeases.forEach((lease) => {
                 const ip = ipOnly(lease.address);
                 if (!isIpv4(ip) || routerIps.has(ip)) return;
-                if (lanClients.get(ip)?.dynamic && !lease.dynamic) return;
-                lanClients.set(ip, {
-                    ip,
-                    host: cleanHost(lease['host-name'] || lease.comment || ''),
-                    mac: lease['mac-address'] || '',
-                    leaseId: lease['.id'] || '',
-                    dynamic: isTrue(lease.dynamic),
-                    source: 'dhcp',
-                    leaseBound: lease.status === 'bound',
-                    iface: ''
-                });
+                const previous = leaseByIp.get(ip);
+                if (previous && previous.dynamic && !isTrue(lease.dynamic)) return;
+                leaseByIp.set(ip, lease);
             });
+            const arpByIp = new Map();
             arpRows.forEach((row) => {
                 const ip = ipOnly(row.address);
                 const iface = String(row.interface || '');
                 if (!isPrivateLan(ip) || routerIps.has(ip)) return;
                 if (/^(mv-wg-|exit$|toIR$|toTR$|lo)/i.test(iface)) return;
                 if (row.status === 'incomplete' || row.status === 'failed') return;
-                const reachable = row.status === 'reachable' && Boolean(row['mac-address']);
-                const existing = lanClients.get(ip);
-                if (existing) {
-                    existing.arpReachable ||= reachable && (!existing.mac || existing.mac.toLowerCase() === row['mac-address'].toLowerCase());
-                    if (!existing.mac) existing.mac = row['mac-address'] || '';
-                    existing.iface = iface;
-                    return;
-                }
+                arpByIp.set(ip, row);
+            });
+
+            // Connected devices = private LAN IPs that currently have firewall connections.
+            const lanClients = new Map();
+            for (const [ip, totals] of clientTotals) {
+                if (!totals?.count || !isPrivateLan(ip) || routerIps.has(ip)) continue;
+                const lease = leaseByIp.get(ip);
+                const arp = arpByIp.get(ip);
+                const iface = String(arp?.interface || '');
+                const mac = lease?.['mac-address'] || arp?.['mac-address'] || '';
                 lanClients.set(ip, {
                     ip,
-                    host: cleanHost(row.comment || ''),
-                    mac: row['mac-address'] || '',
-                    leaseId: '',
-                    dynamic: false,
-                    source: 'arp',
-                    arpReachable: reachable,
-                    iface
+                    host: cleanHost(lease?.['host-name'] || lease?.comment || arp?.comment || ''),
+                    mac,
+                    leaseId: lease?.['.id'] || '',
+                    dynamic: lease ? isTrue(lease.dynamic) : false,
+                    source: lease ? 'dhcp' : (arp ? 'arp' : 'conn'),
+                    leaseBound: lease?.status === 'bound',
+                    arpReachable: Boolean(arp && arp.status === 'reachable' && arp['mac-address']),
+                    iface,
+                    connected: true
                 });
-            });
+            }
+
+            // Keep VPN-assigned clients in the dataset; showOffline controls visibility.
             addressLists.forEach((row) => {
                 const ip = ipOnly(row.address);
-                if (!isIpv4(ip) || lanClients.has(ip) || routerIps.has(ip)) return;
+                if (!isIpv4(ip) || lanClients.has(ip) || routerIps.has(ip) || !isPrivateLan(ip)) return;
+                const lease = leaseByIp.get(ip);
+                const arp = arpByIp.get(ip);
                 lanClients.set(ip, {
                     ip,
-                    host: cleanHost(row.comment || ''),
-                    mac: '',
-                    leaseId: '',
-                    dynamic: false,
-                    source: 'list',
-                    iface: ''
+                    host: cleanHost(lease?.['host-name'] || lease?.comment || row.comment || arp?.comment || ''),
+                    mac: lease?.['mac-address'] || arp?.['mac-address'] || '',
+                    leaseId: lease?.['.id'] || '',
+                    dynamic: lease ? isTrue(lease.dynamic) : false,
+                    source: lease ? 'dhcp' : (arp ? 'arp' : 'list'),
+                    leaseBound: lease?.status === 'bound',
+                    arpReachable: Boolean(arp && arp.status === 'reachable' && arp['mac-address']),
+                    iface: String(arp?.interface || ''),
+                    connected: false
                 });
             });
+
             const clientRows = Array.from(lanClients.values());
             clientRows.forEach((row) => {
                 row.here = sessionIps.has(row.ip);
                 const hasConnections = Boolean(clientTotals.get(row.ip)?.count);
-                row.offline = !(hasConnections || row.leaseBound || row.arpReachable);
+                row.connected = hasConnections;
+                row.offline = !hasConnections;
 
                 if (!row.host) {
                     if (row.here) row.host = 'همین کامپیوتر';
@@ -4673,14 +4664,18 @@
                     else row.host = 'دستگاه ناشناس';
                 }
                 const place = row.iface ? (' · ' + row.iface) : '';
-                const stateTag = row.offline ? ' · وضعیت نامشخص'
-                    : !hasConnections && row.leaseBound ? ' · اجارهٔ DHCP فعال' : '';
-                if (row.here) row.kind = ' · همین دستگاه' + (row.dynamic ? ' · پویا (D)' : '') + place + stateTag;
-                else if (row.dynamic) row.kind = ' · پویا (D)' + place + stateTag;
-                else if (row.source === 'arp') row.kind = ' · سیمی' + place + stateTag;
-                else row.kind = ' · استاتیک' + place + stateTag;
+                const connTag = hasConnections
+                    ? (' · ' + (clientTotals.get(row.ip)?.count || 0) + ' کانکشن')
+                    : ' · بدون کانکشن';
+                if (row.here) row.kind = ' · همین دستگاه' + place + connTag;
+                else if (row.source === 'arp') row.kind = ' · سیمی' + place + connTag;
+                else if (row.source === 'dhcp') row.kind = ' · DHCP' + place + connTag;
+                else row.kind = ' · شبکه' + place + connTag;
             });
-            clientRows.sort((a, b) => Number(b.here) - Number(a.here) || a.host.localeCompare(b.host, 'fa'));
+            clientRows.sort((a, b) => Number(b.here) - Number(a.here)
+                || Number(b.connected) - Number(a.connected)
+                || (clientTotals.get(b.ip)?.count || 0) - (clientTotals.get(a.ip)?.count || 0)
+                || a.host.localeCompare(b.host, 'fa'));
             latestClientRows = clientRows;
             renderClientCards();
             updateSummaryStatus();
@@ -5567,7 +5562,7 @@
         if (latestClientRows.length || monitoring) renderClientCards();
     });
     document.getElementById('clientSearch').addEventListener('input', renderClientCards);
-    for (const id of ['clientRouteFilter', 'clientSourceFilter', 'showOffline']) {
+    for (const id of ['clientRouteFilter', 'showOffline']) {
         document.getElementById(id).addEventListener('change', renderClientCards);
     }
     document.getElementById('clientCards').addEventListener('dblclick', event => {

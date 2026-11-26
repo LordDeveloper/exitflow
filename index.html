@@ -513,32 +513,26 @@
         .credential-form { display: grid; gap: 12px; margin: 16px 0 18px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 14px; background: #181b20; }
         .credential-form textarea { width: 100%; min-height: 150px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.5; }
         .credential-form-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-        .credential-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
-        .credential-cards:empty::before {
+        #credentialCards {
+            display: grid; grid-auto-rows: 1fr; grid-template-columns: minmax(0, 1fr); gap: 12px;
+        }
+        @media (min-width: 700px) { #credentialCards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+        @media (min-width: 980px) { #credentialCards { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+        @media (min-width: 1180px) { #credentialCards { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+        #credentialCards:empty::before {
             content: attr(data-empty);
             display: block;
             grid-column: 1 / -1;
-            padding: 14px;
+            padding: 18px;
             border: 1px dashed var(--border);
-            border-radius: 10px;
+            border-radius: 12px;
             color: var(--muted);
             text-align: center;
-            font-size: 12px;
+            font-size: 13px;
         }
-        .credential-card { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: #171b20; min-width: 0; }
-        .credential-card.is-full { border-color: #6e353c; background: #24181a; }
-        .credential-card-head { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
-        .credential-card-head h3 { margin: 0; font-size: 13px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-        .credential-card-count { flex: none; padding: 2px 7px; border-radius: 999px; background: #241c1e; color: #f3e8ea; font-size: 11px; font-weight: 700; white-space: nowrap; }
-        .credential-card-meta { display: grid; gap: 2px; color: var(--muted); font-size: 11px; line-height: 1.35; }
-        .credential-card-meta strong { color: var(--text); font-size: 11px; direction: ltr; unicode-bidi: isolate; overflow-wrap: anywhere; font-weight: 600; }
-        .credential-card-footer { display: flex; align-items: center; gap: 6px; }
-        .credential-card-actions { display: inline-flex; gap: 4px; margin-inline-start: auto; }
-        .credential-card-actions .relay-icon { width: 28px; height: 28px; border-radius: 8px; }
-        .credential-card-actions .relay-icon svg { width: 14px; height: 14px; }
-        .credential-progress { flex: 1; height: 5px; border-radius: 999px; background: #101418; overflow: hidden; border: 1px solid var(--border); }
-        .credential-progress > span { display: block; height: 100%; background: #3d6b58; }
-        .credential-card.is-full .credential-progress > span { background: #a94a55; }
+        .credential-card.relay-city { min-height: 0; }
+        .credential-card .relay-metrics > div { min-height: 44px; }
+        .credential-card .relay-actions { display: flex; gap: 6px; flex-wrap: wrap; }
         .relay-settings-panel > h3 { margin: 0; font-size: 15px; }
         .relay-management > h2 { margin: 0; font-size: 17px; }
         .relay-body { display: grid; gap: 14px; margin-top: 16px; min-width: 0; }
@@ -6490,26 +6484,33 @@
 
     async function loadCredentialUsage() {
         const payload = await localDashboard('credentials');
-        credentialsCache = payload.credentials || [];
-        credentialsPeerLimit = Number(payload.peerLimit) || 25;
+        credentialsCache = Array.isArray(payload?.credentials) ? payload.credentials : [];
+        credentialsPeerLimit = Number(payload?.peerLimit) || 25;
         const usage = {};
         for (const item of credentialsCache) usage[String(item.id)] = 0;
-        if (!monitoring) return { credentials: credentialsCache, usage, peerLimit: credentialsPeerLimit };
-        const [interfaces, addresses] = await Promise.all([
-            apiList('/interface/wireguard?.proplist=.id,name,comment'),
-            apiList('/ip/address?.proplist=interface,address,dynamic')
-        ]);
-        const byIp = new Map(credentialsCache.map((item) => [item.ipv4, String(item.id)]));
-        for (const iface of interfaces) {
-            if (!String(iface.name || '').startsWith('mv-wg-')) continue;
-            const fromComment = parseCredentialComment(iface.comment);
-            if (fromComment != null && usage[String(fromComment)] != null) {
-                usage[String(fromComment)] += 1;
-                continue;
+        // Router lookup is optional. Never hide locally saved credentials if the router call fails.
+        if (monitoring && credentialsCache.length) {
+            try {
+                const [interfaces, addresses] = await Promise.all([
+                    apiList('/interface/wireguard?.proplist=.id,name,comment'),
+                    apiList('/ip/address?.proplist=interface,address,dynamic')
+                ]);
+                const byIp = new Map(credentialsCache.map((item) => [item.ipv4, String(item.id)]));
+                for (const iface of interfaces) {
+                    if (!String(iface.name || '').startsWith('mv-wg-')) continue;
+                    const fromComment = parseCredentialComment(iface.comment);
+                    if (fromComment != null && usage[String(fromComment)] != null) {
+                        usage[String(fromComment)] += 1;
+                        continue;
+                    }
+                    const row = addresses.find((item) => item.interface === iface.name
+                        && !isTrue(item.dynamic) && isIpv4(ipOnly(item.address)));
+                    const id = row && byIp.get(ipOnly(row.address));
+                    if (id != null) usage[id] += 1;
+                }
+            } catch {
+                // Keep zero usage counts.
             }
-            const row = addresses.find((item) => item.interface === iface.name && !isTrue(item.dynamic) && isIpv4(ipOnly(item.address)));
-            const id = row && byIp.get(ipOnly(row.address));
-            if (id != null) usage[id] += 1;
         }
         return { credentials: credentialsCache, usage, peerLimit: credentialsPeerLimit };
     }
@@ -6801,42 +6802,46 @@
         const host = document.getElementById('credentialCards');
         const fragment = document.createDocumentFragment();
         const limit = snapshot.peerLimit || credentialsPeerLimit;
-        document.getElementById('credentialsTabCount').textContent = String(snapshot.credentials.length);
-        document.getElementById('credentialsBoardCount').textContent = snapshot.credentials.length + ' کلید';
-        if (!snapshot.credentials.length) {
+        const list = Array.isArray(snapshot.credentials) ? snapshot.credentials : [];
+        document.getElementById('credentialsTabCount').textContent = String(list.length);
+        document.getElementById('credentialsBoardCount').textContent = list.length + ' کلید';
+        if (!list.length) {
             host.replaceChildren();
             host.dataset.empty = 'هنوز کلیدی ذخیره نشده است.';
             return;
         }
         delete host.dataset.empty;
-        for (const item of snapshot.credentials) {
+        for (const item of list) {
             const used = Number(snapshot.usage[String(item.id)] || 0);
-            const card = document.createElement('article');
-            card.className = 'credential-card' + (used >= limit ? ' is-full' : '');
-            const head = document.createElement('div');
-            head.className = 'credential-card-head';
+            const full = used >= limit;
+            const card = document.createElement('section');
+            card.className = 'relay-city credential-card';
+            card.dataset.presence = full ? 'off' : 'on';
+            const header = document.createElement('header');
+            header.className = 'relay-city-header';
             const title = document.createElement('h3');
             title.textContent = item.name || ('کلید #' + item.id);
             title.title = title.textContent;
-            const badge = document.createElement('span');
-            badge.className = 'credential-card-count';
-            badge.textContent = used + '/' + limit;
-            badge.title = used + ' peer از ' + limit;
-            head.append(title, badge);
-            const meta = document.createElement('div');
-            meta.className = 'credential-card-meta';
-            meta.innerHTML = `<strong title="${esc(item.address)}">${esc(item.address)}</strong>`
-                + (item.dns ? `<span dir="ltr">${esc(item.dns)}</span>` : '');
-            const footer = document.createElement('div');
-            footer.className = 'credential-card-footer';
-            const bar = document.createElement('div');
-            bar.className = 'credential-progress';
-            bar.title = used + ' از ' + limit;
-            const fill = document.createElement('span');
-            fill.style.width = Math.min(100, Math.round((used / limit) * 100)) + '%';
-            bar.append(fill);
-            const actions = document.createElement('div');
-            actions.className = 'credential-card-actions';
+            const state = document.createElement('span');
+            state.className = 'relay-state';
+            state.textContent = used + ' / ' + limit;
+            state.title = used + ' peer متصل از سقف ' + limit;
+            header.append(title, state);
+            const body = document.createElement('div');
+            body.className = 'relay-peer';
+            body.dataset.presence = full ? 'off' : 'on';
+            const endpoint = document.createElement('span');
+            endpoint.className = 'relay-meta relay-endpoint';
+            endpoint.dir = 'ltr';
+            endpoint.textContent = item.address || '';
+            const metrics = document.createElement('div');
+            metrics.className = 'relay-metrics';
+            metrics.innerHTML = `
+                <div><span>Peerها</span><strong dir="ltr">${used} / ${limit}</strong></div>
+                <div><span>ظرفیت</span><strong>${full ? 'پر' : (limit - used) + ' آزاد'}</strong></div>
+                <div class="relay-metric-wide"><span>DNS</span><strong dir="ltr">${esc(item.dns || '—')}</strong></div>`;
+            const actions = document.createElement('footer');
+            actions.className = 'relay-actions';
             actions.append(
                 relayIcon('ویرایش', 'edit', 'info', () => beginCredentialEdit(item)),
                 relayIcon('حذف', 'remove', 'danger', () => {
@@ -6845,8 +6850,8 @@
                     void saveCredentialAction({ action: 'delete', id: item.id });
                 }, used > 0)
             );
-            footer.append(bar, actions);
-            card.append(head, meta, footer);
+            body.append(endpoint, metrics, actions);
+            card.append(header, body);
             fragment.append(card);
         }
         host.replaceChildren(fragment);
@@ -6857,6 +6862,11 @@
         try {
             const snapshot = await loadCredentialUsage();
             renderCredentialCards(snapshot);
+            if (!status.textContent) {
+                status.textContent = snapshot.credentials.length
+                    ? snapshot.credentials.length + ' کلید آماده است.'
+                    : '';
+            }
         } catch (error) {
             status.textContent = error.message;
         }
@@ -6935,6 +6945,7 @@
             if (monitoring) void refreshAll().catch(() => undefined);
         } catch (error) {
             status.textContent = error.message;
+            try { await loadCredentialsPanel(); } catch { /* keep the form error visible */ }
         } finally {
             credentialsBusy = false;
             button.disabled = false;

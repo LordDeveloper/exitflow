@@ -302,6 +302,16 @@ def insert_credential(connection, fields):
             (fields["name"], fields["private_key"], fields["address"], fields["dns"], now, now),
         )
     except sqlite3.IntegrityError as error:
+        same_key = connection.execute(
+            "SELECT id, name FROM credentials WHERE private_key = ?", (fields["private_key"],)
+        ).fetchone()
+        same_address = connection.execute(
+            "SELECT id, name FROM credentials WHERE address = ?", (fields["address"],)
+        ).fetchone()
+        if same_key:
+            raise ValueError(f"این PrivateKey از قبل به‌عنوان «{same_key[1]}» ذخیره شده است.") from error
+        if same_address:
+            raise ValueError(f"این Address از قبل روی «{same_address[1]}» ثبت شده است.") from error
         raise ValueError("این کلید یا آدرس از قبل ذخیره شده است.") from error
     return get_credential(connection, cursor.lastrowid)
 

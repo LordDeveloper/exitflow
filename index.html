@@ -510,6 +510,30 @@
         .mtr-loss-ok { color: #34d399; }
         .code-ltr { direction: ltr; text-align: left; font-family: monospace; font-size: 11.5px; unicode-bidi: isolate; }
 
+        .credential-form { display: grid; gap: 12px; margin: 16px 0 18px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 14px; background: #181b20; }
+        .credential-form textarea { width: 100%; min-height: 150px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.5; }
+        .credential-form-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+        .credential-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+        .credential-cards:empty::before {
+            content: attr(data-empty);
+            display: block;
+            grid-column: 1 / -1;
+            padding: 18px;
+            border: 1px dashed var(--border);
+            border-radius: 12px;
+            color: var(--muted);
+            text-align: center;
+        }
+        .credential-card { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--border); border-radius: 14px; background: #171b20; min-width: 0; }
+        .credential-card.is-full { border-color: #6e353c; background: #24181a; }
+        .credential-card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+        .credential-card-head h3 { margin: 0; font-size: 15px; overflow-wrap: anywhere; }
+        .credential-card-meta { display: grid; gap: 4px; color: var(--muted); font-size: 12px; }
+        .credential-card-meta strong { color: var(--text); font-size: 13px; direction: ltr; unicode-bidi: isolate; }
+        .credential-card-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+        .credential-progress { height: 8px; border-radius: 999px; background: #101418; overflow: hidden; border: 1px solid var(--border); }
+        .credential-progress > span { display: block; height: 100%; background: #3d6b58; }
+        .credential-card.is-full .credential-progress > span { background: #a94a55; }
         .relay-settings-panel > h3 { margin: 0; font-size: 15px; }
         .relay-management > h2 { margin: 0; font-size: 17px; }
         .relay-body { display: grid; gap: 14px; margin-top: 16px; min-width: 0; }
@@ -888,6 +912,7 @@
             <button type="button" class="tab active" data-tab="clients" role="tab" aria-selected="true" aria-controls="tabClients">کلاینت‌ها</button>
             <button type="button" class="tab" data-tab="chr" role="tab" aria-selected="false" aria-controls="tabChr">تنظیمات DHCP</button>
             <button type="button" class="tab" data-tab="wireguard" role="tab" aria-selected="false" aria-controls="tabWireguard">اینترفیس‌های WireGuard <span class="tab-count" id="wgTabCount">0</span></button>
+            <button type="button" class="tab" data-tab="credentials" role="tab" aria-selected="false" aria-controls="tabCredentials">کلیدهای Mullvad <span class="tab-count" id="credentialsTabCount">0</span></button>
         </div>
         <div class="tab-live">
             <button type="button" id="liveToggleBtn" class="warning compact" style="display:none;">توقف آپدیت زنده</button>
@@ -945,18 +970,6 @@
                 <span id="relayBoardCount" class="relay-board-count">۰ پیر</span>
             </div>
             <div class="relay-body">
-                <section class="relay-settings-panel" aria-label="تنظیمات WireGuard">
-                    <h3>تنظیمات WireGuard</h3>
-                    <form id="relaySettings" class="relay-settings">
-                        <label for="relayPrivateKey">کلید خصوصی WireGuard
-                            <input type="password" id="relayPrivateKey" dir="ltr" autocomplete="new-password">
-                        </label>
-                        <label for="relayClientAddress">آدرس IPv4 تونل
-                            <input id="relayClientAddress" dir="ltr" placeholder="10.42.0.10/32" required>
-                        </label>
-                        <button type="submit">ذخیرهٔ تنظیمات</button>
-                    </form>
-                </section>
                 <section class="relay-settings-panel" aria-label="تنظیمات خروجی">
                     <h3>تونل خروجی exit</h3>
                     <form id="exitConfigForm" class="exit-config">
@@ -1015,6 +1028,33 @@
                     <button type="button" id="relayPageNext">بعدی</button>
                 </nav>
             </div>
+        </section>
+    </div>
+
+    <div id="tabCredentials" class="tab-panel" role="tabpanel" hidden>
+        <section class="card credentials-board">
+            <div class="header-flex">
+                <div>
+                    <h2>کلیدهای Mullvad</h2>
+                    <p class="muted" style="margin: 4px 0 0;">هر کلید تا ۲۵ peer را پشتیبانی می‌کند. موقع ساخت نود، یکی از کلیدهای آزاد به‌صورت تصادفی انتخاب می‌شود.</p>
+                </div>
+                <span id="credentialsBoardCount" class="relay-board-count">۰ کلید</span>
+            </div>
+            <form id="credentialForm" class="credential-form">
+                <input type="hidden" id="credentialEditId" value="">
+                <label for="credentialName">نام کلید
+                    <input id="credentialName" dir="auto" placeholder="Fancy Bobcat" maxlength="80">
+                </label>
+                <label for="credentialRaw">کانفیگ [Interface]
+                    <textarea id="credentialRaw" dir="ltr" rows="8" placeholder="[Interface]&#10;# Device: Fancy Bobcat&#10;PrivateKey = ...&#10;Address = 10.x.x.x/32,...&#10;DNS = 10.64.0.1" required></textarea>
+                </label>
+                <div class="credential-form-actions">
+                    <button type="submit" id="credentialSaveBtn">افزودن کلید</button>
+                    <button type="button" id="credentialCancelBtn" class="ghost" hidden>انصراف از ویرایش</button>
+                </div>
+                <p id="credentialFormStatus" role="status"></p>
+            </form>
+            <div id="credentialCards" class="credential-cards" data-empty="هنوز کلیدی ذخیره نشده است."></div>
         </section>
     </div>
 
@@ -1763,13 +1803,18 @@
         }
 
         try {
-            const routes = await apiList('/ip/route?.proplist=dst-address,gateway,routing-table,disabled');
-            const directRoutes = routes.some((route) => route['routing-table'] === 'main'
-                && route.gateway === 'exit'
-                && String(route['dst-address']).endsWith('/32')
-                && !isTrue(route.disabled));
+            const routes = await apiList('/ip/route?.proplist=dst-address,gateway,routing-table,disabled,comment');
+            const directRoutes = routes.some((route) => isDirectMullvadEndpointRoute(route));
             if (directRoutes) {
                 notes.push('مسیر مستقیم endpointهای Mullvad از exit شناسایی شد');
+                // Direct /32 via exit replaces MVIPs/mv2tr. Still verify the upstream tunnel is alive.
+                const ifaces = await apiList('/interface?.proplist=name,running,disabled');
+                const exitTunnel = ifaces.find((item) => item.name === 'exit' && !isTrue(item.disabled));
+                if (!exitTunnel) {
+                    warnings.push('اینترفیس exit پیدا نشد؛ هندشیک Mullvad از این مسیر رد نمی‌شود');
+                } else if (exitTunnel.running === 'false') {
+                    warnings.push('اینترفیس exit Running نیست؛ Peerهای Mullvad RX نمی‌گیرند');
+                }
             } else {
                 const upstream = await ensureUpstreamHandshake();
                 if (upstream) notes.push(upstream);
@@ -2064,8 +2109,14 @@
         }
 
         const endpointIp = ipOnly(endpointOf(tunnelPeers.find((peer) => endpointOf(peer)) || null));
+        // Catalog installs use main-table /32 via exit. Mixing those IPs into MVIPs/mv2tr
+        // breaks handshakes once many peers share the same Mullvad key through exit.
+        const endpointViaExit = isIpv4(endpointIp) && routes.some((route) => route['routing-table'] === 'main'
+            && route.gateway === 'exit'
+            && normPrefix(route['dst-address']) === endpointIp + '/32'
+            && !isTrue(route.disabled));
         const usesMvips = mangles.some((rule) => markOf(rule) === 'mv2tr' && rule['dst-address-list'] === 'MVIPs' && !isTrue(rule.disabled));
-        if (usesMvips && isIpv4(endpointIp)) {
+        if (usesMvips && isIpv4(endpointIp) && !endpointViaExit) {
             const listed = asList(await apiFetch('/ip/firewall/address-list?list=MVIPs&address=' + encodeURIComponent(endpointIp)));
             const hit = listed.some((row) => sameIp(row.address, endpointIp) && !isTrue(row.disabled));
             if (!hit) {
@@ -2922,6 +2973,7 @@
     function showTab(name) {
         document.getElementById('tabClients').hidden = name !== 'clients';
         document.getElementById('tabWireguard').hidden = name !== 'wireguard';
+        document.getElementById('tabCredentials').hidden = name !== 'credentials';
         document.getElementById('tabChr').hidden = name !== 'chr';
         if (name === 'chr') void runChrDhcpAction();
         document.querySelectorAll('#mainTabs .tab').forEach((button) => {
@@ -2930,6 +2982,7 @@
             button.setAttribute('aria-selected', selected ? 'true' : 'false');
         });
         if (name === 'wireguard') loadRelayPanel();
+        if (name === 'credentials') void loadCredentialsPanel();
     }
 
     let chrDnsFieldSerial = 0;
@@ -5637,10 +5690,11 @@
     if (resumeSession) connectAndStart();
     const relayManagement = document.getElementById('relayManagement');
     const relayStatus = document.getElementById('relayManagementStatus');
-    const relayKeyInput = document.getElementById('relayPrivateKey');
-    const relayAddressInput = document.getElementById('relayClientAddress');
     let relayCatalog = [];
     let installedRelays = null;
+    let credentialsCache = [];
+    let credentialsPeerLimit = 25;
+    let credentialsBusy = false;
     let relayBusy = false;
     let relaySelectionMode = false;
     let relaySelectClickTimer = 0;
@@ -5741,12 +5795,6 @@
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || 'خطا در سرور محلی');
         return result;
-    }
-
-    function showRelaySettings(settings) {
-        relayAddressInput.value = settings.address;
-        relayKeyInput.value = '';
-        relayKeyInput.placeholder = settings.hasKey ? 'کلید ذخیره شده است' : 'کلید کانفیگ Mullvad';
     }
 
     async function loadInstalledRelays() {
@@ -6417,6 +6465,70 @@
     }
 
     const relayEndpointRouteTag = 'Exitflow Mullvad endpoint: ';
+    const CREDENTIAL_COMMENT_PREFIX = 'cred:';
+
+    function isDirectMullvadEndpointRoute(route) {
+        if (!route || route['routing-table'] !== 'main' || route.gateway !== 'exit' || isTrue(route.disabled)) return false;
+        if (!String(route['dst-address'] || '').endsWith('/32')) return false;
+        const tag = String(route.comment || '');
+        return tag.startsWith(relayEndpointRouteTag) || tag === 'Mullvad endpoint via exit';
+    }
+
+    function credentialComment(id, name) {
+        return CREDENTIAL_COMMENT_PREFIX + id + (name ? ' ' + name : '');
+    }
+
+    function parseCredentialComment(comment) {
+        const match = /^cred:(\d+)\b/.exec(String(comment || ''));
+        return match ? Number(match[1]) : null;
+    }
+
+    async function loadCredentialUsage() {
+        const payload = await localDashboard('credentials');
+        credentialsCache = payload.credentials || [];
+        credentialsPeerLimit = Number(payload.peerLimit) || 25;
+        const usage = {};
+        for (const item of credentialsCache) usage[String(item.id)] = 0;
+        if (!monitoring) return { credentials: credentialsCache, usage, peerLimit: credentialsPeerLimit };
+        const [interfaces, addresses] = await Promise.all([
+            apiList('/interface/wireguard?.proplist=.id,name,comment'),
+            apiList('/ip/address?.proplist=interface,address,dynamic')
+        ]);
+        const byIp = new Map(credentialsCache.map((item) => [item.ipv4, String(item.id)]));
+        for (const iface of interfaces) {
+            if (!String(iface.name || '').startsWith('mv-wg-')) continue;
+            const fromComment = parseCredentialComment(iface.comment);
+            if (fromComment != null && usage[String(fromComment)] != null) {
+                usage[String(fromComment)] += 1;
+                continue;
+            }
+            const row = addresses.find((item) => item.interface === iface.name && !isTrue(item.dynamic) && isIpv4(ipOnly(item.address)));
+            const id = row && byIp.get(ipOnly(row.address));
+            if (id != null) usage[id] += 1;
+        }
+        return { credentials: credentialsCache, usage, peerLimit: credentialsPeerLimit };
+    }
+
+    async function removeUnusedMvips(oldPeers) {
+        const ips = [...new Set(oldPeers
+            .flatMap((peer) => [peer['endpoint-address'], peer['current-endpoint-address']])
+            .map(ipOnly)
+            .filter(isIpv4))];
+        if (!ips.length) return;
+        const [peers, mvips] = await Promise.all([
+            apiList('/interface/wireguard/peers?.proplist=interface,endpoint-address,current-endpoint-address'),
+            apiList('/ip/firewall/address-list?list=MVIPs&.proplist=.id,address,disabled').catch(() => [])
+        ]);
+        const used = new Set(peers
+            .flatMap((peer) => [peer['endpoint-address'], peer['current-endpoint-address']])
+            .map(ipOnly)
+            .filter(Boolean));
+        for (const row of mvips) {
+            const ip = ipOnly(row.address);
+            if (!ips.includes(ip) || used.has(ip)) continue;
+            await deleteById('/ip/firewall/address-list', row['.id']);
+        }
+    }
 
     async function changeCityRelay(iface, name) {
         const relay = relayCatalog.find(item => item.name === name);
@@ -6518,10 +6630,12 @@
     }
 
     async function installCatalogRelay(name) {
-        const { relay, address, key } = await localDashboard('provision', { name });
+        const { usage } = await loadCredentialUsage();
+        const provisioned = await localDashboard('provision', { name, usage });
+        const { relay, address, key, credentialId, credentialName, network } = provisioned;
         const iface = 'mv-wg-' + relay.name;
         const [interfaces, peers, routes, tables, addresses] = await Promise.all([
-            apiList('/interface/wireguard?.proplist=.id,name,disabled,listen-port'),
+            apiList('/interface/wireguard?.proplist=.id,name,comment,disabled,listen-port'),
             apiList('/interface/wireguard/peers?.proplist=.id,interface,endpoint-address,current-endpoint-address,public-key'),
             apiList('/ip/route?.proplist=.id,dst-address,gateway,routing-table,disabled'),
             apiList('/routing/table?.proplist=.id,name'),
@@ -6537,19 +6651,27 @@
             throw new Error('این اینترفیس از قبل Peer دیگری دارد. از گزینهٔ تغییر رله استفاده کنید.');
         }
         await ensureCatalogEndpointRoute(relay, iface, interfaces, peers, routes);
+        const comment = credentialComment(credentialId, credentialName);
         if (!interfaces.some(item => item.name === iface)) {
             const listenPort = availableWireGuardPort(interfaces);
             // Do not expose the private key if RouterOS echoes it in an error.
             try {
                 await apiFetch('/interface/wireguard', 'PUT', {
-                    name: iface, 'private-key': key, 'listen-port': listenPort, mtu: 1320, disabled: 'yes'
+                    name: iface, 'private-key': key, 'listen-port': listenPort, mtu: 1320, disabled: 'yes', comment
                 });
             } catch {
                 throw new Error('ساخت اینترفیس WireGuard روی روتر ناموفق بود');
             }
+        } else {
+            const current = interfaces.find(item => item.name === iface);
+            if (current && parseCredentialComment(current.comment) !== Number(credentialId)) {
+                await apiFetch('/interface/wireguard/' + assertId(current['.id']), 'PATCH', { comment });
+            }
         }
         if (!addresses.some(row => row.interface === iface && row.address === address)) {
-            await apiFetch('/ip/address', 'PUT', { address, interface: iface });
+            const payload = { address, interface: iface };
+            if (network) payload.network = network;
+            await apiFetch('/ip/address', 'PUT', payload);
         }
         if (!existingPeers.length) {
             await apiFetch('/interface/wireguard/peers', 'PUT', {
@@ -6617,6 +6739,7 @@
             for (const row of records[index].filter(matches)) await deleteById(path, row['.id']);
         }
         await removeUnusedRelayEndpointRoutes(name, oldPeers);
+        await removeUnusedMvips(oldPeers);
         await deleteById('/interface/wireguard', iface['.id']);
     }
 
@@ -6637,97 +6760,185 @@
         }
     }
 
-    let relaySettingsLoaded = false;
     function loadRelayPanel() {
         renderRelayManagement();
         void refreshRelayCatalog(() => localDashboard('relays'),
             'فهرست رله‌های محلی در دسترس نیست.');
-        if (!relaySettingsLoaded) {
-            void localDashboard('wireguard').then(settings => {
-                showRelaySettings(settings);
-                relaySettingsLoaded = true;
-            }).catch(error => { relayStatus.textContent = error.message; });
-        }
         if (monitoring && !installedRelays) void runRelayAction(loadInstalledRelays);
     }
-    async function saveAndApplyRelaySettings() {
-        const key = relayKeyInput.value.trim();
-        const address = relayAddressInput.value.trim();
-        const previous = await localDashboard('wireguard');
+
+    function resetCredentialForm() {
+        document.getElementById('credentialEditId').value = '';
+        document.getElementById('credentialName').value = '';
+        document.getElementById('credentialRaw').value = '';
+        document.getElementById('credentialSaveBtn').textContent = 'افزودن کلید';
+        document.getElementById('credentialCancelBtn').hidden = true;
+        document.getElementById('credentialFormStatus').textContent = '';
+    }
+
+    function beginCredentialEdit(item) {
+        document.getElementById('credentialEditId').value = String(item.id);
+        document.getElementById('credentialName').value = item.name || '';
+        document.getElementById('credentialRaw').value = [
+            '[Interface]',
+            '# Device: ' + (item.name || 'Mullvad'),
+            'PrivateKey = ',
+            'Address = ' + item.address,
+            item.dns ? 'DNS = ' + item.dns : null
+        ].filter((line) => line != null).join('\n');
+        document.getElementById('credentialSaveBtn').textContent = 'ذخیرهٔ تغییرات';
+        document.getElementById('credentialCancelBtn').hidden = false;
+        document.getElementById('credentialFormStatus').textContent = 'اگر PrivateKey را خالی بگذارید، همان کلید ذخیره‌شده نگه داشته می‌شود.';
+        document.getElementById('credentialRaw').focus();
+    }
+
+    function renderCredentialCards(snapshot) {
+        const host = document.getElementById('credentialCards');
+        const fragment = document.createDocumentFragment();
+        const limit = snapshot.peerLimit || credentialsPeerLimit;
+        document.getElementById('credentialsTabCount').textContent = String(snapshot.credentials.length);
+        document.getElementById('credentialsBoardCount').textContent = snapshot.credentials.length + ' کلید';
+        if (!snapshot.credentials.length) {
+            host.replaceChildren();
+            host.dataset.empty = 'هنوز کلیدی ذخیره نشده است.';
+            return;
+        }
+        delete host.dataset.empty;
+        for (const item of snapshot.credentials) {
+            const used = Number(snapshot.usage[String(item.id)] || 0);
+            const card = document.createElement('article');
+            card.className = 'credential-card' + (used >= limit ? ' is-full' : '');
+            const head = document.createElement('div');
+            head.className = 'credential-card-head';
+            const title = document.createElement('h3');
+            title.textContent = item.name || ('کلید #' + item.id);
+            const badge = document.createElement('span');
+            badge.className = 'relay-board-count';
+            badge.textContent = used + ' / ' + limit + ' peer';
+            head.append(title, badge);
+            const meta = document.createElement('div');
+            meta.className = 'credential-card-meta';
+            meta.innerHTML = `<span>آدرس تونل</span><strong>${esc(item.address)}</strong>`
+                + (item.dns ? `<span>DNS</span><strong>${esc(item.dns)}</strong>` : '')
+                + `<span>${used ? used + ' نود به این کلید وصل است' : 'هنوز نودی به این کلید وصل نیست'}</span>`;
+            const bar = document.createElement('div');
+            bar.className = 'credential-progress';
+            bar.title = used + ' از ' + limit;
+            const fill = document.createElement('span');
+            fill.style.width = Math.min(100, Math.round((used / limit) * 100)) + '%';
+            bar.append(fill);
+            const actions = document.createElement('div');
+            actions.className = 'credential-card-actions';
+            const editBtn = document.createElement('button');
+            editBtn.type = 'button';
+            editBtn.className = 'ghost compact';
+            editBtn.textContent = 'ویرایش';
+            editBtn.addEventListener('click', () => beginCredentialEdit(item));
+            const deleteBtn = document.createElement('button');
+            deleteBtn.type = 'button';
+            deleteBtn.className = 'danger compact';
+            deleteBtn.textContent = 'حذف';
+            deleteBtn.disabled = used > 0;
+            deleteBtn.title = used > 0 ? 'اول peerهای این کلید را حذف کنید' : 'حذف credential';
+            deleteBtn.addEventListener('click', () => {
+                if (used > 0) return;
+                if (!window.confirm('این کلید Mullvad حذف شود؟')) return;
+                void saveCredentialAction({ action: 'delete', id: item.id });
+            });
+            actions.append(editBtn, deleteBtn);
+            card.append(head, meta, bar, actions);
+            fragment.append(card);
+        }
+        host.replaceChildren(fragment);
+    }
+
+    async function loadCredentialsPanel() {
+        const status = document.getElementById('credentialFormStatus');
+        try {
+            const snapshot = await loadCredentialUsage();
+            renderCredentialCards(snapshot);
+        } catch (error) {
+            status.textContent = error.message;
+        }
+    }
+
+    async function applyCredentialToPeers(previous, saved) {
+        if (!monitoring || !saved.key) return { updated: 0, failures: [] };
         const addressPath = '/ip/address';
         const addressFields = '?.proplist=.id,interface,address,network,dynamic,disabled';
-        let ifaces = [];
-        let addresses = [];
-        if (monitoring) {
-            const [wireguard, existingAddresses] = await Promise.all([
-                apiList('/interface/wireguard?.proplist=.id,name'),
-                apiList(addressPath + addressFields)
-            ]);
-            ifaces = wireguard.filter(iface => iface.name.startsWith('mv-wg-'));
-            addresses = existingAddresses;
-        }
-
-        const saved = await localDashboard('wireguard', { key, address, includeKey: ifaces.length > 0 });
+        const [wireguard, addresses] = await Promise.all([
+            apiList('/interface/wireguard?.proplist=.id,name,comment'),
+            apiList(addressPath + addressFields)
+        ]);
+        const targets = wireguard.filter((iface) => {
+            if (!String(iface.name || '').startsWith('mv-wg-')) return false;
+            const fromComment = parseCredentialComment(iface.comment);
+            if (fromComment != null) return fromComment === Number(saved.id);
+            const row = addresses.find((item) => item.interface === iface.name && !isTrue(item.dynamic));
+            return row && ipOnly(row.address) === (previous?.ipv4 || saved.ipv4);
+        });
         const failures = [];
-        const updated = [];
-        for (const iface of ifaces) {
-            const rows = addresses.filter(row => row.interface === iface.name
-                && !isTrue(row.dynamic) && isIpv4(ipOnly(row.address)));
-            const existing = rows.find(row => row.address === saved.address);
-            const previousRow = rows.find(row => row.address === previous.address);
-            const target = existing || previousRow || (rows.length === 1 ? rows[0] : null);
-            if (!target && rows.length) {
-                failures.push(`${iface.name} (آدرس تونل بین چند آدرس مشخص نیست)`);
-                continue;
-            }
+        let updated = 0;
+        for (const iface of targets) {
             try {
                 await apiFetch('/interface/wireguard/' + assertId(iface['.id']), 'PATCH', {
-                    'private-key': saved.key
+                    'private-key': saved.key,
+                    comment: credentialComment(saved.id, saved.name)
                 });
-            } catch {
-                failures.push(`${iface.name} (روتر تغییر کلید خصوصی را تأیید نکرد)`);
-                continue;
-            }
-            try {
+                const rows = addresses.filter((row) => row.interface === iface.name
+                    && !isTrue(row.dynamic) && isIpv4(ipOnly(row.address)));
+                const existing = rows.find((row) => row.address === saved.address);
+                const previousRow = rows.find((row) => previous?.address && row.address === previous.address) || rows[0];
                 const fields = { address: saved.address, network: saved.network, disabled: 'no' };
-                if (!target) {
+                if (!existing && !previousRow) {
                     await apiFetch(addressPath, 'PUT', { ...fields, interface: iface.name });
-                } else if (target.address !== saved.address || isTrue(target.disabled) || target.network !== saved.network) {
-                    await apiFetch(addressPath + '/' + assertId(target['.id']), 'PATCH', fields);
+                } else if (existing) {
+                    if (existing.address !== saved.address || existing.network !== saved.network || isTrue(existing.disabled)) {
+                        await apiFetch(addressPath + '/' + assertId(existing['.id']), 'PATCH', fields);
+                    }
+                } else {
+                    await apiFetch(addressPath + '/' + assertId(previousRow['.id']), 'PATCH', fields);
                 }
-                if (existing && previousRow && existing['.id'] !== previousRow['.id']) {
-                    await deleteById(addressPath, previousRow['.id']);
-                }
-                updated.push({ name: iface.name, previous: previousRow?.address });
+                updated += 1;
             } catch (error) {
-                failures.push(`${iface.name} (تغییر IPv4: ${error.message})`);
+                failures.push(iface.name + ': ' + error.message);
             }
         }
+        return { updated, failures };
+    }
 
-        let confirmed = 0;
-        if (updated.length) {
-            try {
-                const verified = await apiList(addressPath + addressFields);
-                for (const iface of updated) {
-                    const rows = verified.filter(row => row.interface === iface.name);
-                    const current = rows.some(row => row.address === saved.address
-                        && row.network === saved.network && !isTrue(row.disabled));
-                    const stale = iface.previous && iface.previous !== saved.address
-                        && rows.some(row => row.address === iface.previous && !isTrue(row.disabled));
-                    if (current && !stale) confirmed += 1;
-                    else failures.push(`${iface.name} (آدرس IPv4 جدید روی روتر تأیید نشد)`);
-                }
-            } catch {
-                failures.push('خواندن آدرس‌های روتر برای تأیید تغییر ناموفق بود');
+    async function saveCredentialAction(payload) {
+        if (credentialsBusy) return;
+        credentialsBusy = true;
+        const status = document.getElementById('credentialFormStatus');
+        const button = document.getElementById('credentialSaveBtn');
+        button.disabled = true;
+        try {
+            if (payload.action === 'delete') {
+                await localDashboard('credentials', payload);
+                resetCredentialForm();
+                status.textContent = 'کلید حذف شد.';
+            } else if (payload.action === 'update') {
+                const previous = credentialsCache.find((item) => item.id === Number(payload.id));
+                const saved = await localDashboard('credentials', { ...payload, includeKey: monitoring });
+                const applied = await applyCredentialToPeers(previous, saved);
+                resetCredentialForm();
+                status.textContent = applied.failures.length
+                    ? `ذخیره شد؛ اعمال روی روتر ناقص بود: ${applied.failures.join('، ')}`
+                    : (applied.updated ? `ذخیره شد و روی ${applied.updated} نود اعمال شد.` : 'کلید ذخیره شد.');
+            } else {
+                await localDashboard('credentials', payload);
+                resetCredentialForm();
+                status.textContent = 'کلید جدید اضافه شد.';
             }
+            await loadCredentialsPanel();
+            if (monitoring) void refreshAll().catch(() => undefined);
+        } catch (error) {
+            status.textContent = error.message;
+        } finally {
+            credentialsBusy = false;
+            button.disabled = false;
         }
-        showRelaySettings(saved);
-        if (ifaces.length) void refreshAll().catch(error => setPollStatus(error.message));
-        if (failures.length) {
-            throw new Error(`تنظیمات محلی ذخیره شد؛ تأیید IPv4 روی ${confirmed} از ${ifaces.length} اینترفیس. ${failures.join('، ')}`);
-        }
-        return monitoring ? `ذخیره شد؛ IPv4 روی ${confirmed} اینترفیس Mullvad تأیید شد`
-            : 'محلی ذخیره شد؛ برای اعمال روی روتر متصل شوید و دوباره ذخیره کنید';
     }
 
     function parseExitConfig(text) {
@@ -6947,10 +7158,18 @@
         }
     });
 
-    document.getElementById('relaySettings').addEventListener('submit', event => {
+    document.getElementById('credentialForm').addEventListener('submit', (event) => {
         event.preventDefault();
-        void runRelayAction(saveAndApplyRelaySettings);
+        const editId = document.getElementById('credentialEditId').value.trim();
+        const name = document.getElementById('credentialName').value.trim();
+        const raw = document.getElementById('credentialRaw').value;
+        if (editId) {
+            void saveCredentialAction({ action: 'update', id: Number(editId), raw, name: name || undefined });
+        } else {
+            void saveCredentialAction({ action: 'create', raw, name: name || undefined });
+        }
     });
+    document.getElementById('credentialCancelBtn').addEventListener('click', resetCredentialForm);
     document.getElementById('relayPageSize').addEventListener('change', event => {
         relayPageSize = Number(event.currentTarget.value);
         resetRelayPage();

@@ -1,0 +1,86 @@
+name: Build mullvad-ping
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: mullvad-ping-linux-amd64
+            binary: dist/mullvad-ping
+            asset: mullvad-ping-linux-amd64
+          - os: windows-latest
+            artifact: mullvad-ping-windows-amd64
+            binary: dist/mullvad-ping.exe
+            asset: mullvad-ping-windows-amd64.exe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Ensure relays catalog exists
+        shell: bash
+        run: |
+          if [ ! -f storage/relays.json ]; then
+            echo "storage/relays.json is missing" >&2
+            exit 1
+          fi
+
+      - name: Build one-file binary
+        run: python build_mullvad_ping.py
+
+      - name: Stage artifact
+        shell: bash
+        run: |
+          mkdir -p release-assets
+          cp "${{ matrix.binary }}" "release-assets/${{ matrix.asset }}"
+          ls -lh release-assets
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: release-assets/*
+          if-no-files-found: error
+
+  release:
+    name: Attach to GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect release files
+        shell: bash
+        run: |
+          mkdir -p release-files
+          find artifacts -type f -print -exec cp {} release-files/ \;
+          ls -lh release-files
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-files/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true

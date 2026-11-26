@@ -7,3 +7,10 @@ simple.rsc
 
 reset-settings.rsc
 release.py
+
+# Local PyInstaller output for mullvad-ping
+/build/
+/dist/
+/relays.json
+/mullvad-ping.spec
+/*.exe

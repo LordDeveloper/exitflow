@@ -552,7 +552,7 @@
         .exit-drop-hint { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
         #exitConfigStatus { margin: 8px 0 0; color: var(--muted); font-size: 12px; }
         #exitConfigStatus:empty { display: none; }
-        .exit-config button { align-self: center; white-space: nowrap; }
+        .exit-config button { align-self: end; white-space: nowrap; }
         @media (max-width: 680px) { .exit-config { flex-direction: column; } .exit-config button { align-self: stretch; } }
         .relay-settings, .relay-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 10px; align-items: end; }
         .relay-settings { margin: 12px 0; }
@@ -861,7 +861,7 @@
     <header class="page-head">
         <div>
             <h1>داشبورد Mullvad روی میکروتیک</h1>
-            <p>تونل دوتایی WireGuard · مسیر Mullvad از exit و mv2tr · کلاینت‌ها روی mv-wg-* یا exit</p>
+            <p>مدیریت تونل‌ها، رله‌ها و مسیر کلاینت‌ها</p>
         </div>
         <div class="head-right">
             <div class="user-bar" id="userBar" hidden>
@@ -912,6 +912,7 @@
             <button type="button" class="tab active" data-tab="clients" role="tab" aria-selected="true" aria-controls="tabClients">کلاینت‌ها</button>
             <button type="button" class="tab" data-tab="chr" role="tab" aria-selected="false" aria-controls="tabChr">تنظیمات DHCP</button>
             <button type="button" class="tab" data-tab="wireguard" role="tab" aria-selected="false" aria-controls="tabWireguard">اینترفیس‌های WireGuard <span class="tab-count" id="wgTabCount">0</span></button>
+            <button type="button" class="tab" data-tab="interfaces" role="tab" aria-selected="false" aria-controls="tabInterfaces">مدیریت اینترفیس‌ها</button>
             <button type="button" class="tab" data-tab="credentials" role="tab" aria-selected="false" aria-controls="tabCredentials">کلیدهای Mullvad <span class="tab-count" id="credentialsTabCount">0</span></button>
         </div>
         <div class="tab-live">
@@ -967,18 +968,6 @@
                 </div>
             </div>
             <div class="relay-body">
-                <section class="relay-settings-panel" aria-label="تنظیمات خروجی">
-                    <h3>تونل خروجی exit</h3>
-                    <form id="exitConfigForm" class="exit-config">
-                        <label class="exit-drop" for="exitConfigFile">
-                            <span class="exit-drop-title">فایل کانفیگ WireGuard</span>
-                            <span class="exit-drop-hint" id="exitConfigName">فایل ‎.conf را اینجا رها کنید یا برای انتخاب کلیک کنید</span>
-                            <input type="file" id="exitConfigFile" accept=".conf,.ini,text/plain" required>
-                        </label>
-                        <button type="submit">اعمال روی exit</button>
-                    </form>
-                    <p id="exitConfigStatus" role="status"></p>
-                </section>
                 <div class="relay-toolbar">
                     <input id="relayCatalogSearch" type="search" aria-label="جستجوی رله" placeholder="جستجوی کشور، شهر، نام رله یا IP">
                     <details id="relayCountryPicker" class="relay-country-picker">
@@ -1025,6 +1014,33 @@
                     <button type="button" id="relayPageNext">بعدی</button>
                 </nav>
             </div>
+        </section>
+    </div>
+
+    <div id="tabInterfaces" class="tab-panel" role="tabpanel" hidden>
+        <section class="card">
+            <section class="relay-settings-panel" aria-label="تنظیمات خروجی">
+                <h2>مدیریت اینترفیس‌ها</h2>
+                <form id="exitConfigForm" class="exit-config">
+                    <label class="exit-drop" for="exitConfigFile">
+                        <span class="exit-drop-title">فایل کانفیگ WireGuard</span>
+                        <span class="exit-drop-hint" id="exitConfigName">فایل ‎.conf را اینجا رها کنید یا برای انتخاب کلیک کنید</span>
+                        <input type="file" id="exitConfigFile" accept=".conf,.ini,text/plain" required>
+                    </label>
+                    <label>نام اینترفیس
+                        <input id="exitInterfaceName" dir="ltr" required maxlength="63" autocomplete="off">
+                    </label>
+                    <button type="submit">اعمال کانفیگ</button>
+                </form>
+                <p id="exitConfigStatus" role="status"></p>
+            </section>
+            <form id="mullvadUpstreamForm" class="relay-settings-panel">
+                <h3>مسیر پیش‌فرض ترافیک اینترفیس‌های مولواد</h3>
+                <label for="mullvadUpstream">اینترفیس خروجی</label>
+                <select id="mullvadUpstream" dir="ltr" required></select>
+                <button type="submit">ذخیره مسیر</button>
+                <p id="mullvadUpstreamStatus" role="status"></p>
+            </form>
         </section>
     </div>
 
@@ -1446,8 +1462,13 @@
         return rule['new-routing-mark'] || rule['routing-mark'] || '';
     }
 
+    const upstreamInterfaceTag = 'Exitflow WireGuard uplink';
+    const upstreamRouteTag = 'Exitflow Mullvad upstream';
+    let mullvadUpstream = 'exit';
+    let upstreamInterfaces = new Set();
+
     function isExitIfaceName(name) {
-        return ['exit', 'toir', 'totr'].includes(String(name || '').toLowerCase());
+        return upstreamInterfaces.has(name) || ['exit', 'toir', 'totr'].includes(String(name || '').toLowerCase());
     }
 
     function isClientRouteTarget(name) {
@@ -1579,6 +1600,8 @@
     function forceLogout(reasonMessage = '', isError = false) {
         stopLiveTimer();
         monitoring = false;
+        mullvadUpstream = 'exit';
+        upstreamInterfaces.clear();
         isLive = false;
         paintLiveButton();
         document.getElementById('liveToggleBtn').style.display = 'none';
@@ -1818,16 +1841,16 @@
 
         try {
             const routes = await apiList('/ip/route?.proplist=dst-address,gateway,routing-table,disabled,comment');
-            const directRoutes = routes.some((route) => isDirectMullvadEndpointRoute(route));
+            const directRoutes = routes.some(route => isDirectMullvadEndpointRoute(route) && route.gateway === mullvadUpstream);
             if (directRoutes) {
-                notes.push('مسیر مستقیم endpointهای Mullvad از exit شناسایی شد');
+                notes.push(`مسیر مستقیم endpointهای Mullvad از ${mullvadUpstream} شناسایی شد`);
                 // Direct /32 via exit replaces MVIPs/mv2tr. Still verify the upstream tunnel is alive.
                 const ifaces = await apiList('/interface?.proplist=name,running,disabled');
-                const exitTunnel = ifaces.find((item) => item.name === 'exit' && !isTrue(item.disabled));
+                const exitTunnel = ifaces.find((item) => item.name === mullvadUpstream && !isTrue(item.disabled));
                 if (!exitTunnel) {
-                    warnings.push('اینترفیس exit پیدا نشد؛ هندشیک Mullvad از این مسیر رد نمی‌شود');
+                    warnings.push(`اینترفیس ${mullvadUpstream} پیدا نشد؛ هندشیک Mullvad از این مسیر رد نمی‌شود`);
                 } else if (exitTunnel.running === 'false') {
-                    warnings.push('اینترفیس exit Running نیست؛ Peerهای Mullvad RX نمی‌گیرند');
+                    warnings.push(`اینترفیس ${mullvadUpstream} Running نیست؛ Peerهای Mullvad RX نمی‌گیرند`);
                 }
             } else {
                 const upstream = await ensureUpstreamHandshake();
@@ -1901,7 +1924,7 @@
             passthrough: 'no',
             comment: 'MVIPs handshake via mv2tr'
         });
-        return notes ? notes + ' · هندشیک روتر از mv2tr/exit خارج می‌شود' : 'هندشیک WireGuard روتر از این به بعد با mv2tr از exit خارج می‌شود';
+        return (notes ? notes + ' · ' : '') + `هندشیک WireGuard روتر با mv2tr از ${mullvadUpstream} خارج می‌شود`;
     }
 
     async function ensureMv2trDefault(routes) {
@@ -1912,19 +1935,19 @@
             try {
                 await apiFetch('/ip/route', 'PUT', {
                     'dst-address': '0.0.0.0/0',
-                    gateway: 'exit',
+                    gateway: mullvadUpstream,
                     'routing-table': 'mv2tr',
                     comment: 'default via exit'
                 });
-                routes.push({ 'dst-address': '0.0.0.0/0', gateway: 'exit', 'routing-table': 'mv2tr', disabled: 'false', active: 'true' });
-                notes.push('مسیر پیش‌فرض جدول mv2tr از exit ساخته شد');
+                routes.push({ 'dst-address': '0.0.0.0/0', gateway: mullvadUpstream, 'routing-table': 'mv2tr', disabled: 'false', active: 'true' });
+                notes.push(`مسیر پیش‌فرض جدول mv2tr از ${mullvadUpstream} ساخته شد`);
             } catch (err) {
                 if (!/already/i.test(err.message)) warnings.push('ساخت مسیر mv2tr ناموفق: ' + err.message);
             }
         } else if (!defaults.some((route) => isTrue(route.active))) {
             warnings.push('مسیر 0.0.0.0/0 در جدول mv2tr غیرفعال است؛ هندشیک Mullvad جواب نمی‌گیرد (TX بدون RX)');
-        } else if (!defaults.some((route) => String(route.gateway || '') === 'exit')) {
-            warnings.push('مسیر پیش‌فرض mv2tr به exit وصل نیست');
+        } else if (!defaults.some((route) => route.gateway === mullvadUpstream)) {
+            warnings.push(`مسیر پیش‌فرض mv2tr به ${mullvadUpstream} وصل نیست`);
         }
         return { notes, warnings };
     }
@@ -1954,16 +1977,16 @@
         const [peers, ifaces, routes, mvips] = await Promise.all([
             apiList('/interface/wireguard/peers?.proplist=.id,interface,endpoint-address,current-endpoint-address,last-handshake,rx,disabled'),
             apiList('/interface?.proplist=name,running,disabled'),
-            apiList('/ip/route?.proplist=.id,dst-address,gateway,routing-table,active,disabled'),
+            apiList('/ip/route?.proplist=.id,dst-address,gateway,routing-table,active,disabled,comment'),
             apiList('/ip/firewall/address-list?list=MVIPs&.proplist=.id,address,disabled').catch(() => [])
         ]);
-        const exitTunnel = ifaces.find((item) => item.name === 'exit' && !isTrue(item.disabled));
+        const exitTunnel = ifaces.find((item) => item.name === mullvadUpstream && !isTrue(item.disabled));
         if (!exitTunnel) {
-            warnings.push('اینترفیس exit پیدا نشد؛ هندشیک Mullvad از این مسیر رد نمی‌شود');
+            warnings.push(`اینترفیس ${mullvadUpstream} پیدا نشد؛ هندشیک Mullvad از این مسیر رد نمی‌شود`);
             return { notes, warnings };
         }
         if (exitTunnel.running === 'false') {
-            warnings.push('اینترفیس exit Running نیست؛ تا خودش هندشیک نگیرد Peerهای Mullvad هم RX نمی‌گیرند');
+            warnings.push(`اینترفیس ${mullvadUpstream} Running نیست؛ تا خودش هندشیک نگیرد Peerهای Mullvad هم RX نمی‌گیرند`);
         }
 
         const mv2trDefault = await ensureMv2trDefault(routes);
@@ -2021,7 +2044,7 @@
                 try {
                     await apiFetch('/ip/route', 'PUT', {
                         'dst-address': prefix,
-                        gateway: 'exit',
+                        gateway: mullvadUpstream,
                         'routing-table': 'mv2tr',
                         comment: 'MVIP via exit'
                     });
@@ -2055,7 +2078,7 @@
                 await mapPool(stale, 8, async (row) => {
                     try { await deleteById('/ip/firewall/connection', row['.id']); } catch (err) { /* gone */ }
                 });
-                if (stale.length) notes.push(stale.length + ' اتصال قدیمی هندشیک پاک شد تا دوباره از exit برود');
+                if (stale.length) notes.push(stale.length + ` اتصال قدیمی هندشیک پاک شد تا دوباره از ${mullvadUpstream} برود`);
             } catch (err) {
                 warnings.push('اتصال‌های قدیمی هندشیک پاک نشد: ' + err.message);
             }
@@ -2069,7 +2092,7 @@
         }
 
         if (uniqueIps.length) {
-            notes.push(uniqueIps.length + ' Endpoint Mullvad باید از جدول mv2tr و اینترفیس exit خارج شود');
+            notes.push(uniqueIps.length + ` Endpoint Mullvad باید از جدول mv2tr و اینترفیس ${mullvadUpstream} خارج شود`);
         }
         return { notes, warnings };
     }
@@ -2105,7 +2128,7 @@
         const [mangles, rules, routes, nats, filters, ifaces, peers] = await Promise.all([
             apiList('/ip/firewall/mangle?.proplist=.id,chain,action,src-address-list,dst-address-list,new-routing-mark,routing-mark,passthrough,disabled'),
             apiList('/routing/rule?.proplist=.id,action,table,routing-table,routing-mark,dst-address,disabled'),
-            apiList('/ip/route?.proplist=.id,dst-address,gateway,routing-table,active,disabled'),
+            apiList('/ip/route?.proplist=.id,dst-address,gateway,routing-table,active,disabled,comment'),
             apiList('/ip/firewall/nat?.proplist=.id,chain,action,out-interface,disabled'),
             apiList('/ip/firewall/filter?.proplist=.id,chain,action,src-address-list,comment,disabled'),
             apiList('/interface?.proplist=name,running,disabled'),
@@ -2121,7 +2144,7 @@
         if (!tunnel.ok) {
             warnings.push(isExitIfaceName(peerName)
                 ? `${peerName}: ${tunnel.text}. تا تونل exit زنده نشود کلاینت اینترنت ندارد`
-                : `${peerName}: ${tunnel.text}. TX بدون RX یعنی هندشیک از exit جواب نمی‌گیرد؛ تا زنده نشود کلاینت اینترنت ندارد`);
+                : `${peerName}: ${tunnel.text}. TX بدون RX یعنی هندشیک از ${mullvadUpstream} جواب نمی‌گیرد؛ تا زنده نشود کلاینت اینترنت ندارد`);
         }
 
         const endpointIp = ipOnly(endpointOf(tunnelPeers.find((peer) => endpointOf(peer)) || null));
@@ -2130,7 +2153,7 @@
         // Exit's own endpoint must stay on the ISP path — never mark it for mv2tr/exit.
         if (!isExitIfaceName(peerName)) {
             const endpointViaExit = isIpv4(endpointIp) && routes.some((route) => route['routing-table'] === 'main'
-                && route.gateway === 'exit'
+                && route.gateway === mullvadUpstream
                 && normPrefix(route['dst-address']) === endpointIp + '/32'
                 && !isTrue(route.disabled));
             const usesMvips = mangles.some((rule) => markOf(rule) === 'mv2tr' && rule['dst-address-list'] === 'MVIPs' && !isTrue(rule.disabled));
@@ -2144,7 +2167,7 @@
                             address: endpointIp,
                             comment: 'endpoint ' + peerName
                         });
-                        notes.push('آدرس ' + endpointIp + ' به MVIPs اضافه شد تا هندشیک از exit برود');
+                        notes.push(`آدرس ${endpointIp} به MVIPs اضافه شد تا هندشیک از ${mullvadUpstream} برود`);
                     } catch (err) {
                         if (!/already/i.test(err.message)) throw err;
                     }
@@ -2999,6 +3022,8 @@
 
     function showTab(name) {
         document.getElementById('tabClients').hidden = name !== 'clients';
+        document.getElementById('tabInterfaces').hidden = name !== 'interfaces';
+        if (name === 'interfaces') void loadInterfacePanel();
         document.getElementById('tabWireguard').hidden = name !== 'wireguard';
         document.getElementById('tabCredentials').hidden = name !== 'credentials';
         document.getElementById('tabChr').hidden = name !== 'chr';
@@ -4468,6 +4493,8 @@
                 apiList('/ip/firewall/address-list?.proplist=.id,list,address,comment,disabled')
             ]);
 
+            upstreamInterfaces = new Set(wgList.filter(item => item.comment === upstreamInterfaceTag
+                || item.name === mullvadUpstream).map(item => item.name));
             addressLists = addrLists.filter((row) => row.list && isClientAddressList(row.list) && !isTrue(row.disabled));
 
             const ifaceByName = new Map();
@@ -4645,7 +4672,7 @@
                 const ip = ipOnly(row.address);
                 const iface = String(row.interface || '');
                 if (!isPrivateLan(ip) || routerIps.has(ip)) return;
-                if (/^(mv-wg-|exit$|toIR$|toTR$|lo)/i.test(iface)) return;
+                if (/^(mv-wg-|lo)/i.test(iface) || isExitIfaceName(iface)) return;
                 if (row.status === 'incomplete' || row.status === 'failed') return;
                 arpByIp.set(ip, row);
             });
@@ -4778,6 +4805,7 @@
             setBusy(false);
 
             const now = Date.now();
+            await loadInterfacePanel();
             void loadClientsSection(now, true).catch((err) => setPollStatus('خطا در بخش کلاینت‌ها: ' + err.message));
             void loadWireguardSection(now, true).catch((err) => setPollStatus('خطا در بخش WireGuard: ' + err.message));
             void loadRouterHealthSection();
@@ -5397,7 +5425,7 @@
                 apiList('/interface/wireguard/peers?.proplist=interface,endpoint-address,current-endpoint-address,last-handshake,rx,disabled'),
                 apiList('/ip/firewall/mangle?.proplist=.id,chain,action,src-address-list,dst-address-list,new-routing-mark,routing-mark,passthrough,disabled'),
                 apiList('/routing/rule?.proplist=.id,action,table,routing-table,routing-mark,dst-address,disabled'),
-                apiList('/ip/route?.proplist=.id,dst-address,gateway,routing-table,active,disabled'),
+                apiList('/ip/route?.proplist=.id,dst-address,gateway,routing-table,active,disabled,comment'),
                 apiList('/ip/firewall/nat?.proplist=.id,chain,action,out-interface,disabled'),
                 apiList('/ip/firewall/filter?.proplist=.id,chain,action,src-address-list,comment,disabled'),
                 apiList('/ip/firewall/address-list?.proplist=.id,list,address,disabled')
@@ -5425,16 +5453,19 @@
             });
 
             // 3. Upstream exit & MVIPs
-            const exitTunnel = ifaces.find((i) => i.name === 'exit');
+            const exitTunnel = ifaces.find((i) => i.name === mullvadUpstream);
             const exitTunnelUp = exitTunnel && !isTrue(exitTunnel.disabled) && isTrue(exitTunnel.running);
             const epIp = ipOnly(hs.endpoint);
-            const inMvips = epIp && addrLists.some((a) => a.list === 'MVIPs' && sameIp(a.address, epIp) && !isTrue(a.disabled));
+            const hasEndpointRoute = epIp && (routes.some(route => route['routing-table'] === 'main'
+                && route.gateway === mullvadUpstream && normPrefix(route['dst-address']) === epIp + '/32'
+                && !isTrue(route.disabled) && isTrue(route.active))
+                || addrLists.some(a => a.list === 'MVIPs' && sameIp(a.address, epIp) && !isTrue(a.disabled)));
             checks.push({
-                level: exitTunnelUp ? (inMvips ? 'ok' : 'warn') : 'bad',
-                title: 'تونل بالادستی exit و لیست MVIPs',
-                detail: !exitTunnelUp ? 'اینترفیس exit فعال نیست' : (inMvips ? `exit فعال است و ${epIp} در MVIPs قرار دارد` : `exit فعال است اما ${epIp || 'Endpoint'} در MVIPs نیست`)
+                level: exitTunnelUp ? (hasEndpointRoute ? 'ok' : 'warn') : 'bad',
+                title: `تونل بالادستی ${mullvadUpstream} و مسیر Endpoint`,
+                detail: !exitTunnelUp ? `اینترفیس ${mullvadUpstream} فعال نیست` : (hasEndpointRoute ? `${mullvadUpstream} فعال است و ${epIp} مسیر دارد` : `${mullvadUpstream} فعال است اما مسیر ${epIp || 'Endpoint'} پیدا نشد`)
             });
-            if (exitTunnelUp && !inMvips && epIp) hasFixableIssue = true;
+            if (exitTunnelUp && !hasEndpointRoute && epIp) hasFixableIssue = true;
 
             // 4. Routing Rule priority (192.168.0.0/16 & peer lookup)
             const lanRuleIdx = rules.findIndex((r) => normPrefix(r['dst-address']) === '192.168.0.0/16' && r.action === 'lookup' && isMainTable(r) && !isTrue(r.disabled));
@@ -5873,7 +5904,7 @@
     }
 
     function isListedWireGuardPeer(item) {
-        return Boolean(item.name && !['exit', 'toir', 'totr'].includes(item.name.toLowerCase()));
+        return Boolean(item.name && !isExitIfaceName(item.name));
     }
 
     function syncInstalledRelays(rows, peers) {
@@ -6552,7 +6583,7 @@
     const CREDENTIAL_COMMENT_PREFIX = 'cred:';
 
     function isDirectMullvadEndpointRoute(route) {
-        if (!route || route['routing-table'] !== 'main' || route.gateway !== 'exit' || isTrue(route.disabled)) return false;
+        if (!route || route['routing-table'] !== 'main' || isTrue(route.disabled)) return false;
         if (!String(route['dst-address'] || '').endsWith('/32')) return false;
         const tag = String(route.comment || '');
         return tag.startsWith(relayEndpointRouteTag) || tag === 'Mullvad endpoint via exit';
@@ -6661,21 +6692,21 @@
 
     async function ensureCatalogEndpointRoute(relay, ifaceName, interfaces, peers, routes) {
         const prefix = relay.ip + '/32';
-        if (peers.some(peer => peer.interface === 'exit'
+        if (peers.some(peer => peer.interface === mullvadUpstream
             && [peer['endpoint-address'], peer['current-endpoint-address']].includes(relay.ip))) {
-            throw new Error('آدرس این رله با endpoint خود exit یکی است');
+            throw new Error(`آدرس این رله با endpoint خود ${mullvadUpstream} یکی است`);
         }
         const enabledRoutes = routes.filter(route => route['routing-table'] === 'main'
             && normPrefix(route['dst-address']) === prefix && !isTrue(route.disabled));
-        if (enabledRoutes.some(route => route.gateway !== 'exit')) {
+        if (enabledRoutes.some(route => route.gateway !== mullvadUpstream)) {
             throw new Error('برای ' + prefix + ' در جدول main مسیر متعارض با gateway دیگری وجود دارد.');
         }
-        if (!interfaces.some(item => item.name === 'exit' && !isTrue(item.disabled))) {
-            throw new Error('برای مسیریابی endpoint رله، اینترفیس exit باید فعال باشد.');
+        if (!interfaces.some(item => item.name === mullvadUpstream && !isTrue(item.disabled))) {
+            throw new Error(`برای مسیریابی endpoint رله، اینترفیس ${mullvadUpstream} باید فعال باشد.`);
         }
         if (!enabledRoutes.length) {
             await apiFetch('/ip/route', 'PUT', {
-                'dst-address': prefix, gateway: 'exit', 'routing-table': 'main',
+                'dst-address': prefix, gateway: mullvadUpstream, 'routing-table': 'main',
                 comment: relayEndpointRouteTag + ifaceName
             });
         }
@@ -6690,7 +6721,7 @@
         const usedIps = new Set(peers.filter(peer => peer.interface !== ifaceName)
             .flatMap(peer => [peer['endpoint-address'], peer['current-endpoint-address']]));
         for (const route of routes) {
-            if (route['routing-table'] !== 'main' || route.gateway !== 'exit' || isTrue(route.dynamic)) continue;
+            if (route['routing-table'] !== 'main' || isTrue(route.dynamic)) continue;
             const prefix = normPrefix(route['dst-address']);
             const ip = prefix.split('/')[0];
             if (prefix !== ip + '/32' || ip === keepIp || usedIps.has(ip)) continue;
@@ -7037,6 +7068,163 @@
         }
     }
 
+    const uplinkSelect = document.getElementById('mullvadUpstream');
+    const uplinkStatus = document.getElementById('mullvadUpstreamStatus');
+    const uplinkForm = document.getElementById('mullvadUpstreamForm');
+    const uplinkButton = uplinkForm.querySelector('button');
+    const uplinkRoutePath = '/ip/route';
+    const uplinkRoutesQuery = '?.proplist=.id,dst-address,gateway,routing-table,dynamic,disabled,comment';
+
+    function isMullvadDefaultRoute(route) {
+        return route['routing-table'] === 'mv2tr' && normPrefix(route['dst-address']) === '0.0.0.0/0'
+            && !isTrue(route.dynamic);
+    }
+
+    function getMullvadUpstream(interfaces, routes) {
+        const enabledDefaults = routes.filter(route => isMullvadDefaultRoute(route) && !isTrue(route.disabled));
+        const saved = enabledDefaults.find(route => route.comment === upstreamRouteTag);
+        const isWireGuardGateway = route => interfaces.some(iface => iface.name === route.gateway && !/^mv-wg-/i.test(iface.name));
+        const current = saved || routes.find(route => isDirectMullvadEndpointRoute(route) && isWireGuardGateway(route))
+            || enabledDefaults.find(isWireGuardGateway);
+        return current?.gateway
+            || interfaces.find(iface => /^(exit|toir|totr)$/i.test(iface.name) && !isTrue(iface.disabled))?.name
+            || 'exit';
+    }
+
+    async function readUplinks() {
+        return Promise.all([
+            apiList('/interface/wireguard?.proplist=.id,name,comment,disabled'),
+            apiList(uplinkRoutePath + uplinkRoutesQuery)
+        ]);
+    }
+
+    async function loadInterfacePanel() {
+        uplinkButton.disabled = true;
+        uplinkSelect.replaceChildren(new Option('انتخاب اینترفیس', ''));
+        if (!monitoring) {
+            uplinkStatus.textContent = 'ابتدا به روتر متصل شوید.';
+            return;
+        }
+        const router = getBaseUrl();
+        try {
+            const [interfaces, routes] = await readUplinks();
+            if (!monitoring || getBaseUrl() !== router) return;
+            mullvadUpstream = getMullvadUpstream(interfaces, routes);
+            upstreamInterfaces = new Set(interfaces.filter(iface => iface.comment === upstreamInterfaceTag
+                || iface.name === mullvadUpstream).map(iface => iface.name));
+            for (const iface of interfaces.filter(iface => !/^mv-wg-/i.test(iface.name))) {
+                const option = new Option(iface.name + (isTrue(iface.disabled) ? ' · غیرفعال' : ''), iface.name);
+                option.disabled = isTrue(iface.disabled);
+                uplinkSelect.add(option);
+            }
+            const current = [...uplinkSelect.options].some(option => option.value === mullvadUpstream && !option.disabled);
+            uplinkSelect.value = current ? mullvadUpstream : '';
+            uplinkButton.disabled = ![...uplinkSelect.options].some(option => option.value && !option.disabled);
+            uplinkStatus.textContent = current ? 'مسیر فعلی مولواد از ' + mullvadUpstream + ' عبور می‌کند.' : 'یک اینترفیس خروجی فعال انتخاب کنید.';
+        } catch (error) {
+            uplinkStatus.textContent = error.message;
+        }
+    }
+
+    async function saveMullvadUpstream(name) {
+        const [[interfaces, routes], peers, nats, mvips] = await Promise.all([
+            readUplinks(),
+            apiList('/interface/wireguard/peers?.proplist=interface,endpoint-address,current-endpoint-address,disabled'),
+            apiList('/ip/firewall/nat?.proplist=chain,action,out-interface,disabled,src-address,dst-address,src-address-list,dst-address-list'),
+            apiList('/ip/firewall/address-list?list=MVIPs&.proplist=address,disabled')
+        ]);
+        if (/^mv-wg-/i.test(name) || !interfaces.some(iface => iface.name === name && !isTrue(iface.disabled))) {
+            throw new Error('یک اینترفیس WireGuard فعال انتخاب کنید.');
+        }
+        const previous = getMullvadUpstream(interfaces, routes);
+        const selectedPeers = peers.filter(peer => peer.interface === name && !isTrue(peer.disabled));
+        if (!selectedPeers.length) throw new Error('اینترفیس انتخاب‌شده باید حداقل یک Peer فعال داشته باشد.');
+        const endpointsOf = peer => [peer['endpoint-address'], peer['current-endpoint-address']].map(ipOnly).filter(isIpv4);
+        const relayPrefixes = new Set(peers.filter(peer => /^mv-wg-/.test(peer.interface) && !isTrue(peer.disabled))
+            .flatMap(endpointsOf).map(ip => ip + '/32'));
+        const enabled = routes.filter(route => !isTrue(route.disabled));
+        const defaults = enabled.filter(isMullvadDefaultRoute);
+        const endpointRoutes = enabled.filter(route => !isTrue(route.dynamic)
+            && (isDirectMullvadEndpointRoute(route)
+                || (route.gateway === previous && normPrefix(route['dst-address']).endsWith('/32')
+                    && (route['routing-table'] === 'mv2tr'
+                        || (route['routing-table'] === 'main' && relayPrefixes.has(normPrefix(route['dst-address'])))))));
+        const targetPrefixes = new Set([...relayPrefixes, ...endpointRoutes.map(route => normPrefix(route['dst-address']))]);
+        const ownPrefixes = selectedPeers.flatMap(endpointsOf).map(ip => ip + '/32');
+        if (ownPrefixes.some(prefix => targetPrefixes.has(prefix)
+            || mvips.some(row => !isTrue(row.disabled) && normPrefix(row.address) === prefix)
+            || enabled.some(route => route.gateway === name && normPrefix(route['dst-address']) === prefix))) {
+            throw new Error('مسیر Endpoint اینترفیس انتخاب‌شده با مسیر مولواد تداخل دارد.');
+        }
+        const moved = new Set(endpointRoutes);
+        const endpointKeys = new Set(endpointRoutes.map(route => route['routing-table'] + ':' + normPrefix(route['dst-address'])));
+        if (enabled.some(route => !moved.has(route) && route.gateway !== name
+            && endpointKeys.has(route['routing-table'] + ':' + normPrefix(route['dst-address'])))) {
+            throw new Error('یک مسیر دیگر برای Endpoint مولواد با این انتخاب تداخل دارد.');
+        }
+        if (defaults.some(route => ![previous, name].includes(route.gateway) && route.comment !== upstreamRouteTag)) {
+            throw new Error('جدول mv2tr مسیر پیش‌فرض دیگری دارد. تداخل مسیر را روی روتر بررسی کنید.');
+        }
+
+        const updated = [];
+        try {
+            if (!nats.some(row => row.chain === 'srcnat' && row.action === 'masquerade'
+                && row['out-interface'] === name && !isTrue(row.disabled)
+                && !['src-address', 'dst-address', 'src-address-list', 'dst-address-list'].some(key => row[key]))) {
+                await apiFetch('/ip/firewall/nat', 'PUT', {
+                    chain: 'srcnat', action: 'masquerade', 'out-interface': name, comment: 'Exitflow Mullvad uplink'
+                });
+            }
+            await ensureFibTable('mv2tr');
+            const primary = defaults.find(route => route.comment === upstreamRouteTag) || defaults[0];
+            for (const route of [...endpointRoutes, ...defaults.filter(route => route !== primary), ...(primary ? [primary] : [])]) {
+                if (route.gateway === name && (route !== primary || route.comment === upstreamRouteTag)) continue;
+                const path = uplinkRoutePath + '/' + assertId(route['.id']);
+                const patch = route === primary ? { gateway: name, comment: upstreamRouteTag } : { gateway: name };
+                updated.push({ path, gateway: route.gateway, ...(route === primary ? { comment: route.comment || '' } : {}) });
+                await apiFetch(path, 'PATCH', patch);
+            }
+            if (!primary) {
+                await apiFetch(uplinkRoutePath, 'PUT', {
+                    'dst-address': '0.0.0.0/0', 'routing-table': 'mv2tr', gateway: name, comment: upstreamRouteTag
+                });
+            }
+        } catch (error) {
+            let restoreFailed = false;
+            for (const { path, ...patch } of updated.reverse()) {
+                try {
+                    await apiFetch(path, 'PATCH', patch);
+                } catch {
+                    restoreFailed = true;
+                }
+            }
+            if (restoreFailed) throw new Error('تغییر مسیر کامل نشد و بازگردانی بعضی مسیرها ناموفق بود. مسیرها را روی روتر بررسی کنید.');
+            throw error;
+        }
+    }
+
+    uplinkForm.addEventListener('submit', async event => {
+        event.preventDefault();
+        if (!monitoring || uplinkButton.disabled) return;
+        if (relayBusy || document.querySelector('#exitConfigForm button').disabled) {
+            uplinkStatus.textContent = 'پس از پایان عملیات جاری دوباره تلاش کنید.';
+            return;
+        }
+        uplinkButton.disabled = true;
+        uplinkSelect.disabled = true;
+        relayBusy = true;
+        try {
+            await saveMullvadUpstream(uplinkSelect.value);
+            await loadInterfacePanel();
+        } catch (error) {
+            uplinkStatus.textContent = error.message;
+        } finally {
+            relayBusy = false;
+            uplinkSelect.disabled = false;
+            uplinkButton.disabled = false;
+        }
+    });
+
     function parseExitConfig(text) {
         let section;
         const sections = new Map();
@@ -7120,14 +7308,13 @@
         };
     }
 
-    async function applyExitConfig(config) {
+    async function applyExitConfig(config, ifaceName) {
         const ifPath = '/interface/wireguard';
         const peerPath = ifPath + '/peers';
-        const interfaces = await apiList(ifPath + '?.proplist=.id,name');
-        const candidates = interfaces.filter(row => ['exit', 'toir', 'totr'].includes(row.name.toLowerCase()));
-        if (candidates.length > 1) throw new Error('چند اینترفیس خروجی با نام‌های exit، toIR یا toTR پیدا شد. فقط یکی باید موجود باشد.');
-        const iface = candidates[0];
-        const ifaceName = iface?.name ?? 'exit';
+        const interfaces = await apiList(ifPath + '?.proplist=.id,name,listen-port');
+        const iface = interfaces.find(row => row.name.toLowerCase() === ifaceName.toLowerCase());
+        if (iface && iface.name !== ifaceName) throw new Error('این نام با حروف کوچک یا بزرگ متفاوت روی روتر وجود دارد.');
+        if (iface && !window.confirm('کانفیگ و آدرس‌های ثابت ' + ifaceName + ' جایگزین می‌شوند. ادامه می‌دهید؟')) return false;
         let endpointIp = config.host;
         if (!isIpv4(endpointIp) && !endpointIp.includes(':')) {
             const resolved = await apiFetch('/resolve', 'POST', { 'domain-name': endpointIp });
@@ -7139,7 +7326,7 @@
             apiList('/ip/route?.proplist=dst-address,gateway,disabled')
         ]);
         if (routes.some(route => route['dst-address'] === endpointIp + '/32'
-            && [ifaceName, 'exit'].includes(route.gateway) && !isTrue(route.disabled))) {
+            && route.gateway === ifaceName && !isTrue(route.disabled))) {
             throw new Error('IP خود Endpoint از مسیر تونل خروجی روت شده و باعث حلقه می‌شود.');
         }
         const currentPeers = peers.filter(row => row.interface === ifaceName);
@@ -7159,7 +7346,10 @@
         let stage = 'ساخت اینترفیس خروجی';
         try {
             if (!iface) {
-                await apiFetch(ifPath, 'PUT', { ...config.settings, name: 'exit' });
+                await apiFetch(ifPath, 'PUT', {
+                    'listen-port': config.settings['listen-port'] ?? availableWireGuardPort(interfaces),
+                    ...config.settings, name: ifaceName, comment: upstreamInterfaceTag
+                });
             }
             stage = 'آدرس‌های تونل';
             for (const row of config.addresses) {
@@ -7175,13 +7365,13 @@
             }
             if (iface) {
                 stage = 'کلید و نام اینترفیس';
-                await apiFetch(ifPath + '/' + assertId(iface['.id']), 'PATCH', { ...config.settings, name: 'exit' });
+                await apiFetch(ifPath + '/' + assertId(iface['.id']), 'PATCH', config.settings);
             }
             stage = 'تنظیمات Peer';
             if (currentPeers.length) {
                 await apiFetch(peerPath + '/' + assertId(currentPeers[0]['.id']), 'PATCH', config.peer);
             } else {
-                await apiFetch(peerPath, 'PUT', { ...config.peer, interface: 'exit' });
+                await apiFetch(peerPath, 'PUT', { ...config.peer, interface: ifaceName });
             }
             stage = 'حذف آدرس‌های قبلی';
             for (const row of currentAddresses) {
@@ -7192,6 +7382,7 @@
         }
     }
 
+    const exitInterfaceName = document.getElementById('exitInterfaceName');
     const exitDrop = document.querySelector('.exit-drop');
     const exitFile = document.getElementById('exitConfigFile');
     const exitName = document.getElementById('exitConfigName');
@@ -7199,6 +7390,7 @@
         const file = exitFile.files && exitFile.files[0];
         exitName.textContent = file ? file.name : 'فایل ‎.conf را اینجا رها کنید یا برای انتخاب کلیک کنید';
         exitDrop.classList.toggle('is-filled', Boolean(file));
+        exitInterfaceName.value = file ? file.name.replace(/\.[^.]+$/, '').replace(/[^A-Za-z0-9_.-]/g, '-').slice(0, 63) : '';
     }
     exitFile.addEventListener('change', paintExitFile);
     for (const type of ['dragenter', 'dragover']) {
@@ -7229,6 +7421,10 @@
         const status = document.getElementById('exitConfigStatus');
         const button = form.querySelector('button');
         if (button.disabled) return;
+        if (uplinkSelect.disabled) {
+            status.textContent = 'پس از پایان تغییر مسیر دوباره تلاش کنید.';
+            return;
+        }
         if (!monitoring) {
             status.textContent = 'ابتدا به روتر متصل شوید.';
             return;
@@ -7241,10 +7437,17 @@
         button.disabled = true;
         try {
             const config = parseExitConfig(await file.text());
-            if (!window.confirm('کانفیگ و آدرس‌های ثابت تونل خروجی جایگزین می‌شوند و اتصال ممکن است موقتاً قطع شود. ادامه می‌دهید؟')) return;
+            const name = exitInterfaceName.value.trim();
+            if (!/^[A-Za-z0-9_.-]{1,63}$/.test(name) || /^(mv-wg-|main$|mv2tr$)/i.test(name)) {
+                throw new Error('نام اینترفیس نامعتبر یا رزروشده است.');
+            }
             status.textContent = 'در حال اعمال کانفیگ روی روتر…';
-            await applyExitConfig(config);
-            status.textContent = 'کانفیگ روی exit اعمال شد.';
+            if (await applyExitConfig(config, name) === false) {
+                status.textContent = '';
+                return;
+            }
+            status.textContent = 'کانفیگ روی ' + name + ' اعمال شد.';
+            await loadInterfacePanel();
             field.value = '';
             paintExitFile();
         } catch (error) {

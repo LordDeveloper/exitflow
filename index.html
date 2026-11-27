@@ -1698,6 +1698,7 @@
         relaySelectionMode = false;
         selectedRelayNodes.clear();
         peerTrafficTests.clear();
+        peerTests.clear();
         document.getElementById('wgTabCount').textContent = '0';
         renderRelayManagement();
         setHeal('');
@@ -2918,6 +2919,46 @@
         return ipOnly(peer?.['current-endpoint-address'] || peer?.['endpoint-address'] || '');
     }
 
+    function peerPingStorageKey() {
+        return 'mullvadDash.lastPing:' + getBaseUrl();
+    }
+
+    function restorePeerPings() {
+        peerTests.clear();
+        try {
+            const entries = JSON.parse(localStorage.getItem(peerPingStorageKey()) || '[]');
+            if (!Array.isArray(entries)) return;
+            for (const [name, result] of entries) {
+                if (typeof name === 'string' && ['ok', 'fail'].includes(result?.state)
+                    && Number.isFinite(result.checkedAt)) peerTests.set(name, result);
+            }
+        } catch {
+            // The dashboard can still report pings when browser storage is unavailable.
+        }
+    }
+
+    function rememberPeerPing(name, result) {
+        try {
+            const key = peerPingStorageKey();
+            const entries = JSON.parse(localStorage.getItem(key) || '[]');
+            const saved = new Map(Array.isArray(entries) ? entries : []);
+            if (result) {
+                const { state, endpoint, checkedAt, avg, text } = result;
+                saved.set(name, { state, endpoint, checkedAt, avg, text });
+            } else {
+                saved.delete(name);
+            }
+            localStorage.setItem(key, JSON.stringify([...saved]));
+        } catch {
+            // The current session retains its in-memory ping result.
+        }
+    }
+
+    function forgetPeerPing(name) {
+        peerTests.delete(name);
+        rememberPeerPing(name, null);
+    }
+
     async function testPeerPath(name, srcAddress, customTarget, customCount, options = {}) {
         const quiet = Boolean(options && options.quiet);
         const tell = (message, failed) => { if (!quiet) setStatus(message, failed); };
@@ -2945,12 +2986,14 @@
         const countNum = endpoint ? 1 : Math.min(20, Math.max(1, Number(customCount) || 3));
         const previous = peerTests.get(name);
         const previousAvg = previous?.avg;
-        peerTests.set(name, { state: 'running', target, endpoint, avg: previousAvg, checkedAt: previous?.checkedAt, text: endpoint ? '' : `در حال فرستادن ${countNum} بسته به ${target}…` });
+        const pending = { state: 'running', target, endpoint, avg: previousAvg, checkedAt: previous?.checkedAt, text: endpoint ? '' : `در حال فرستادن ${countNum} بسته به ${target}…` };
+        peerTests.set(name, pending);
         paintPeerTest(name);
         const routed = { address: target, count: String(countNum), interface: name };
         if (srcAddress) routed['src-address'] = srcAddress;
         try {
             const result = await apiFetch('/ping', 'POST', routed, 25000);
+            if (peerTests.get(name) !== pending) return;
             const summary = summarizePing(result);
             if (summary.received > 0) {
                 peerTests.set(name, { state: 'ok', endpoint, previousAvg, checkedAt: Date.now(), avg: summary.avg, text: `مسیر به ${target} باز است · ${summary.received} از ${summary.sent} جواب` + (summary.avg ? ' · ' + summary.avg : '') });
@@ -2958,9 +3001,11 @@
                 peerTests.set(name, { state: 'fail', endpoint, previousAvg, checkedAt: Date.now(), text: endpoint ? `رلهٔ ${target} به پینگ پاسخ نداد` : `پینگ ${target} از این تونل پاسخی نگرفت` });
             }
         } catch (err) {
+            if (peerTests.get(name) !== pending) return;
             peerTests.set(name, { state: 'error', endpoint, previousAvg, checkedAt: Date.now(), text: 'اجرای تست: ' + err.message });
         }
         const test = peerTests.get(name);
+        if (test.state === 'ok' || test.state === 'fail') rememberPeerPing(name, test);
         if (!quiet) showRelayToast('تست پینگ · ' + name, test.text, test.state !== 'ok');
         paintPeerTest(name);
     }
@@ -4890,6 +4935,7 @@
             clientKeyOrder = [];
             resetSpeedWindow();
             monitoring = true;
+            restorePeerPings();
 
             const info = Array.isArray(resource) ? (resource[0] || {}) : (resource || {});
             const version = info.version ? ('RouterOS ' + info.version) : 'RouterOS';
@@ -6037,9 +6083,7 @@
                         || old.peer['public-key'] !== item.peer['public-key']);
                 if (relayChanged && item.name.startsWith('mv-wg-')) notifyRelayChange(item.name, item.peer);
                 if (!sameNode || relayChanged) peerTrafficTests.delete(old.name);
-                if ((!sameNode || relayChanged) && peerTests.get(old.name)?.state !== 'running') {
-                    peerTests.delete(old.name);
-                }
+                if (!sameNode || relayChanged) forgetPeerPing(old.name);
             }
         }
         installedRelays = next;
@@ -7293,7 +7337,8 @@
                 setText(field, values[field.dataset.uplinkMetric]);
                 if (field.dataset.uplinkMetric === 'test') field.hidden = !values.test;
             }
-            card.querySelector('[data-uplink-metric="ping"]').title = ping?.text || '';
+            const checked = ping?.checkedAt ? new Date(ping.checkedAt).toLocaleString('fa-IR') : '';
+            card.querySelector('[data-uplink-metric="ping"]').title = [ping?.text, checked].filter(Boolean).join(' · ');
             for (const button of card.querySelectorAll('[data-icon="ping"], [data-icon="traffic"]')) {
                 button.disabled = card.dataset.disabled === 'true' || testing
                     || ping?.state === 'running' || Boolean(traffic?.running);
@@ -7713,7 +7758,7 @@
         uplinkStatus.textContent = 'در حال حذف اینترفیس ' + iface.name + '…';
         await deleteById(wireguardPath, iface['.id']);
         for (const route of dependentRoutes) await deleteById(uplinkRoutePath, route['.id']);
-        peerTests.delete(iface.name);
+        forgetPeerPing(iface.name);
         peerTrafficTests.delete(iface.name);
         for (const peer of peers.filter(row => row.interface === iface.name)) await deleteById(wireguardPeersPath, peer['.id']);
         for (const address of addresses) await deleteById(address.path, address['.id']);
@@ -7850,7 +7895,7 @@
             const config = fromFile ? parseExitConfig(await file.text()) : readManualInterfaceConfig();
             const target = interfaceEditTarget;
             await applyExitConfig(config, name, target);
-            peerTests.delete(target.name);
+            forgetPeerPing(target.name);
             peerTrafficTests.delete(target.name);
             interfaceEditor.close();
             await loadInterfacePanel();

@@ -7175,7 +7175,7 @@
                     <div class="relay-tx"><span>↑ ارسال</span><strong data-uplink-metric="txSpeed">—</strong><small data-uplink-metric="tx"></small></div>
                 </div>
                 <div class="relay-metrics">
-                    <div class="relay-metric-wide"><strong data-uplink-metric="publicIp" dir="auto">—</strong><span>IP خروجی</span></div>
+                    <div class="relay-metric-wide"><strong data-uplink-metric="publicIp" dir="auto">—</strong><span>IP خروجی</span><small data-uplink-metric="publicIpDetail" dir="auto" hidden></small></div>
                 </div>
                 <div class="relay-meta" data-uplink-metric="test"></div>
                 <footer class="relay-actions"></footer>`;
@@ -7233,6 +7233,7 @@
             const values = {
                 ping: interfacePingText(ping),
                 publicIp: interfacePublicIps.get(name)?.text || '—',
+                publicIpDetail: interfacePublicIps.get(name)?.detail || '',
                 rxSpeed: stats ? formatSpeed(stats.rxSpeed) : '—',
                 txSpeed: stats ? formatSpeed(stats.txSpeed) : '—',
                 rx: stats ? formatBytes(stats.rx) : '',
@@ -7241,7 +7242,7 @@
             };
             for (const field of card.querySelectorAll('[data-uplink-metric]')) {
                 setText(field, values[field.dataset.uplinkMetric]);
-                field.hidden = field.dataset.uplinkMetric === 'test' && !values.test;
+                if (['test', 'publicIpDetail'].includes(field.dataset.uplinkMetric)) field.hidden = !values[field.dataset.uplinkMetric];
             }
             card.querySelector('[data-uplink-metric="ping"]').title = ping?.text || '';
             card.querySelector('[data-uplink-metric="publicIp"]').title = interfacePublicIps.get(name)?.detail || publicIpHost;
@@ -7256,17 +7257,21 @@
         const session = { base: getBaseUrl(), headers: getAuthHeaders(false) };
         const request = (path, method, body, timeout) => apiFetch(path, method, body, timeout, session);
         const list = async path => asList(await request(path));
-        const [addresses, resolved, rules, mangle] = await Promise.all([
+        const execute = async script => {
+            const response = await request('/execute', 'POST', { script, 'as-string': '' }, 15000);
+            return String(asList(response)[0]?.ret ?? '').trim();
+        };
+        const [addresses, rules, mangle] = await Promise.all([
             list('/ip/address?.proplist=interface,address,disabled,invalid'),
-            request('/resolve', 'POST', { 'domain-name': publicIpHost }),
             list('/routing/rule?.proplist=.id'),
             list('/ip/firewall/mangle?.proplist=.id,dynamic')
         ]);
         const source = addresses.filter(row => row.interface === name && !isTrue(row.disabled) && !isTrue(row.invalid))
             .map(row => ipOnly(row.address)).find(isIpv4);
-        const destination = asList(resolved)[0]?.ret;
         if (!source) throw new Error('اینترفیس آدرس IPv4 فعال ندارد.');
-        if (!isIpv4(destination)) throw new Error('آدرس IPv4 سرویس ifconfig.me پیدا نشد.');
+        const destination = await execute(':put [:resolve "ifconfig.me" type=ipv4]');
+        if (!isIpv4(destination)) throw new Error('DNS سرویس ifconfig.me: ' + (destination || 'آدرس IPv4 دریافت نشد.'));
+
         const table = 'ef-ip-' + crypto.getRandomValues(new Uint32Array(1))[0].toString(16);
         const tag = 'Exitflow IP lookup ' + table;
         const prefix = destination + '/32';
@@ -7278,6 +7283,7 @@
             item.id = asId(result);
             return assertId(item.id);
         }
+        let stage = 'آماده‌سازی مسیر روی روتر';
         try {
             await add('/routing/table', { name: table, fib: 'yes' });
             await add('/ip/route', { 'dst-address': prefix, gateway: name, 'routing-table': table });
@@ -7292,19 +7298,25 @@
                 action: 'lookup-only-in-table', table, 'src-address': source + '/32', 'dst-address': prefix,
                 ...(firstRule ? { 'place-before': assertId(firstRule) } : {})
             });
-            const result = await request('/tool/fetch', 'POST', {
-                mode: 'https', address: destination, host: publicIpHost, 'src-path': '/ip', 'src-address': source,
-                'check-certificate': 'yes-without-crl', 'http-max-redirect-count': '0', duration: '8s', output: 'user'
-            }, 12000);
-            const ip = String(asList(result)[0]?.data || '').trim();
-            if (!isIpv4(ip)) throw new Error('پاسخ ifconfig.me یک IPv4 معتبر نبود.');
-            const counters = asList(await request('/ip/firewall/mangle/print', 'POST', {
-                stats: '', '.proplist': ['.id', 'packets'], '.query': ['comment=' + tag]
-            }));
+            stage = 'درخواست HTTPS به ifconfig.me';
+            // Pin the destination used by the routing rule and return Fetch's body explicitly via REST.
+            const ip = await execute(':local result [/tool/fetch address=' + destination
+                + ' host=ifconfig.me mode=https src-path=ip src-address=' + source
+                + ' check-certificate=yes-without-crl http-max-redirect-count=0 duration=8s output=user as-value]; :put ($result->"data")');
+            if (!isIpv4(ip)) throw new Error(ip || 'سرویس IP برنگرداند.');
+            stage = 'تأیید عبور از اینترفیس';
+            let counters = await list('/ip/firewall/mangle?.proplist=.id,packets');
+            if (!counters.some(row => row['.id'] === counter && row.packets != null)) {
+                counters = asList(await request('/ip/firewall/mangle/print', 'POST', {
+                    stats: '', '.proplist': ['.id', 'packets'], '.query': ['comment=' + tag]
+                }));
+            }
             if (!counters.some(row => row['.id'] === counter && Number(row.packets) > 0)) {
-                throw new Error('عبور درخواست ifconfig.me از این اینترفیس تأیید نشد.');
+                throw new Error('شمارندهٔ درخواست روی اینترفیس افزایش پیدا نکرد.');
             }
             return ip;
+        } catch (error) {
+            throw new Error(stage + ' · ' + error.message);
         } finally {
             let cleanupFailed = false;
             for (const { path, id } of created.reverse()) {
@@ -7339,7 +7351,7 @@
             pending.text = await fetchInterfacePublicIp(name);
         } catch (error) {
             pending.text = 'در دسترس نیست';
-            pending.detail = error.message;
+            pending.detail = error.message.slice(0, 240);
         } finally {
             interfaceIpLookupBusy = false;
             updateInterfaceCardStats();

@@ -1664,6 +1664,7 @@
         relaySelectionMode = false;
         selectedRelayNodes.clear();
         peerTrafficTests.clear();
+        interfacePublicIps.clear();
         document.getElementById('wgTabCount').textContent = '0';
         renderRelayManagement();
         setHeal('');
@@ -1712,11 +1713,11 @@
         return `HTTP ${status}: ${detail || 'پاسخ نامعتبر از روتر'}`;
     }
 
-    async function apiFetch(endpoint, method = 'GET', body = null, timeoutMs = 12000) {
+    async function apiFetch(endpoint, method = 'GET', body = null, timeoutMs = 12000, session = null) {
         const hasBody = body != null;
         const opts = {
             method,
-            headers: getAuthHeaders(hasBody),
+            headers: session ? { ...session.headers, ...(hasBody ? { 'Content-Type': 'application/json' } : {}) } : getAuthHeaders(hasBody),
             cache: 'no-store',
             credentials: 'omit'
         };
@@ -1726,7 +1727,7 @@
         if (hasBody) opts.body = JSON.stringify(body);
         let response;
         try {
-            response = await fetch(getBaseUrl() + endpoint, opts);
+            response = await fetch((session?.base ?? getBaseUrl()) + endpoint, opts);
         } catch (err) {
             if (err && err.name === 'TimeoutError') throw new Error('زمان اتصال به روتر تمام شد');
             if (err && err.name === 'AbortError') throw new Error('زمان اتصال به روتر تمام شد');
@@ -1735,7 +1736,7 @@
         const text = await response.text();
         if (!response.ok) {
             const msg = errorText(response.status, text);
-            if (response.status === 401) {
+            if (response.status === 401 && !session) {
                 forceLogout(msg, true);
             }
             throw new Error(msg);
@@ -7118,6 +7119,9 @@
     const interfacePingAllBtn = document.getElementById('interfacePingAllBtn');
     const interfacePingTarget = '1.1.1.1';
     let interfacePingAllBusy = false;
+    let interfaceIpLookupBusy = false;
+    const interfacePublicIps = new Map();
+    const publicIpHost = 'ifconfig.me';
     const uplinkStatus = document.getElementById('mullvadUpstreamStatus');
     const wireguardPath = '/interface/wireguard';
     const wireguardPeersPath = wireguardPath + '/peers';
@@ -7170,6 +7174,9 @@
                     <div class="relay-rx"><span>↓ دریافت</span><strong data-uplink-metric="rxSpeed">—</strong><small data-uplink-metric="rx"></small></div>
                     <div class="relay-tx"><span>↑ ارسال</span><strong data-uplink-metric="txSpeed">—</strong><small data-uplink-metric="tx"></small></div>
                 </div>
+                <div class="relay-metrics">
+                    <div class="relay-metric-wide"><strong data-uplink-metric="publicIp" dir="auto">—</strong><span>IP خروجی</span></div>
+                </div>
                 <div class="relay-meta" data-uplink-metric="test"></div>
                 <footer class="relay-actions"></footer>`;
             card.querySelector('strong').textContent = iface.name;
@@ -7186,9 +7193,9 @@
                     }
                 });
             const ping = relayIcon('تست پینگ از اینترفیس', 'ping', 'info',
-                () => testPeerPath(iface.name, null, interfacePingTarget), disabled, iface.name);
+                () => testUplinkAndReadIp(iface.name), disabled, iface.name);
             const traffic = relayIcon('تست ترافیک', 'traffic', 'info',
-                () => testPeerTraffic(iface.name), disabled, iface.name);
+                () => testUplinkAndReadIp(iface.name, { traffic: true }), disabled, iface.name);
             card.querySelector('footer').append(route, ping, traffic, edit, remove);
             return card;
         });
@@ -7214,7 +7221,7 @@
         const cards = interfaceCards.querySelectorAll('[data-uplink-interface]');
         const models = new Map(wgCatalog.map(model => [model.name, model]));
         const targetBusy = peerPingTargetBusy(interfacePingTarget);
-        const testing = interfacePingAllBusy || targetBusy;
+        const testing = interfacePingAllBusy || interfaceIpLookupBusy || targetBusy;
         interfacePingAllBtn.disabled = !monitoring || testing
             || ![...cards].some(card => card.dataset.disabled === 'false');
         for (const card of cards) {
@@ -7225,6 +7232,7 @@
             const stats = model?.stats;
             const values = {
                 ping: interfacePingText(ping),
+                publicIp: interfacePublicIps.get(name)?.text || '—',
                 rxSpeed: stats ? formatSpeed(stats.rxSpeed) : '—',
                 txSpeed: stats ? formatSpeed(stats.txSpeed) : '—',
                 rx: stats ? formatBytes(stats.rx) : '',
@@ -7236,6 +7244,7 @@
                 field.hidden = field.dataset.uplinkMetric === 'test' && !values.test;
             }
             card.querySelector('[data-uplink-metric="ping"]').title = ping?.text || '';
+            card.querySelector('[data-uplink-metric="publicIp"]').title = interfacePublicIps.get(name)?.detail || publicIpHost;
             for (const button of card.querySelectorAll('[data-icon="ping"], [data-icon="traffic"]')) {
                 button.disabled = card.dataset.disabled === 'true' || testing
                     || ping?.state === 'running' || Boolean(traffic?.running);
@@ -7243,8 +7252,103 @@
         }
     }
 
+    async function fetchInterfacePublicIp(name) {
+        const session = { base: getBaseUrl(), headers: getAuthHeaders(false) };
+        const request = (path, method, body, timeout) => apiFetch(path, method, body, timeout, session);
+        const list = async path => asList(await request(path));
+        const [addresses, resolved, rules, mangle] = await Promise.all([
+            list('/ip/address?.proplist=interface,address,disabled,invalid'),
+            request('/resolve', 'POST', { 'domain-name': publicIpHost }),
+            list('/routing/rule?.proplist=.id'),
+            list('/ip/firewall/mangle?.proplist=.id,dynamic')
+        ]);
+        const source = addresses.filter(row => row.interface === name && !isTrue(row.disabled) && !isTrue(row.invalid))
+            .map(row => ipOnly(row.address)).find(isIpv4);
+        const destination = asList(resolved)[0]?.ret;
+        if (!source) throw new Error('اینترفیس آدرس IPv4 فعال ندارد.');
+        if (!isIpv4(destination)) throw new Error('آدرس IPv4 سرویس ifconfig.me پیدا نشد.');
+        const table = 'ef-ip-' + crypto.getRandomValues(new Uint32Array(1))[0].toString(16);
+        const tag = 'Exitflow IP lookup ' + table;
+        const prefix = destination + '/32';
+        const created = [];
+        async function add(path, fields) {
+            created.push({ path, id: null });
+            const item = created.at(-1);
+            const result = await request(path, 'PUT', path === '/routing/table' ? fields : { ...fields, comment: tag });
+            item.id = asId(result);
+            return assertId(item.id);
+        }
+        try {
+            await add('/routing/table', { name: table, fib: 'yes' });
+            await add('/ip/route', { 'dst-address': prefix, gateway: name, 'routing-table': table });
+            const firstMangle = mangle.find(row => !isTrue(row.dynamic))?.['.id'];
+            const counter = await add('/ip/firewall/mangle', {
+                chain: 'postrouting', action: 'passthrough', protocol: 'tcp', 'dst-port': '443',
+                'src-address': source + '/32', 'dst-address': prefix, 'out-interface': name,
+                ...(firstMangle ? { 'place-before': assertId(firstMangle) } : {})
+            });
+            const firstRule = rules[0]?.['.id'];
+            await add('/routing/rule', {
+                action: 'lookup-only-in-table', table, 'src-address': source + '/32', 'dst-address': prefix,
+                ...(firstRule ? { 'place-before': assertId(firstRule) } : {})
+            });
+            const result = await request('/tool/fetch', 'POST', {
+                mode: 'https', address: destination, host: publicIpHost, 'src-path': '/ip', 'src-address': source,
+                'check-certificate': 'yes-without-crl', 'http-max-redirect-count': '0', duration: '8s', output: 'user'
+            }, 12000);
+            const ip = String(asList(result)[0]?.data || '').trim();
+            if (!isIpv4(ip)) throw new Error('پاسخ ifconfig.me یک IPv4 معتبر نبود.');
+            const counters = asList(await request('/ip/firewall/mangle/print', 'POST', {
+                stats: '', '.proplist': ['.id', 'packets'], '.query': ['comment=' + tag]
+            }));
+            if (!counters.some(row => row['.id'] === counter && Number(row.packets) > 0)) {
+                throw new Error('عبور درخواست ifconfig.me از این اینترفیس تأیید نشد.');
+            }
+            return ip;
+        } finally {
+            let cleanupFailed = false;
+            for (const { path, id } of created.reverse()) {
+                try {
+                    if (id) await request(path + '/' + assertId(id), 'DELETE');
+                    else {
+                        const fields = path === '/routing/table' ? 'name' : 'comment';
+                        const rows = await list(path + '?.proplist=.id,' + fields);
+                        for (const row of rows.filter(item => item.comment === tag || item.name === table)) {
+                            await request(path + '/' + assertId(row['.id']), 'DELETE');
+                        }
+                    }
+                } catch {
+                    cleanupFailed = true;
+                }
+            }
+            if (cleanupFailed) throw new Error('پاک‌سازی تنظیمات موقت IP ناموفق بود. قوانین دارای برچسب «' + tag + '» را روی روتر بررسی کنید.');
+        }
+    }
+
+    async function testUplinkAndReadIp(name, { traffic = false, quiet = false } = {}) {
+        if (!monitoring || interfaceBusy || relayBusy || interfaceIpLookupBusy || peerPingTargetBusy(interfacePingTarget)) return false;
+        const router = getBaseUrl();
+        const pending = { text: 'در حال بررسی…' };
+        interfaceIpLookupBusy = true;
+        interfacePublicIps.set(name, pending);
+        updateInterfaceCardStats();
+        try {
+            if (traffic) await testPeerTraffic(name);
+            else await testPeerPath(name, null, interfacePingTarget, null, { quiet });
+            if (!monitoring || getBaseUrl() !== router || interfacePublicIps.get(name) !== pending) return false;
+            pending.text = await fetchInterfacePublicIp(name);
+        } catch (error) {
+            pending.text = 'در دسترس نیست';
+            pending.detail = error.message;
+        } finally {
+            interfaceIpLookupBusy = false;
+            updateInterfaceCardStats();
+        }
+        return true;
+    }
+
     interfacePingAllBtn.addEventListener('click', async () => {
-        if (!monitoring || interfacePingAllBusy || interfaceBusy || relayBusy || peerPingTargetBusy(interfacePingTarget)) return;
+        if (!monitoring || interfacePingAllBusy || interfaceIpLookupBusy || interfaceBusy || relayBusy || peerPingTargetBusy(interfacePingTarget)) return;
         const cards = [...interfaceCards.querySelectorAll('[data-uplink-interface][data-disabled="false"]')];
         if (!cards.length) return;
         const router = getBaseUrl();
@@ -7256,9 +7360,7 @@
                 if (!monitoring || getBaseUrl() !== router) return;
                 const name = card.dataset.uplinkInterface;
                 uplinkStatus.textContent = `پینگ همگانی · ${index + 1} از ${cards.length} · ${name}`;
-                const previous = peerTests.get(name);
-                await testPeerPath(name, null, interfacePingTarget, null, { quiet: true });
-                if (peerTests.get(name) !== previous) done += 1;
+                if (await testUplinkAndReadIp(name, { quiet: true })) done += 1;
             }
             if (monitoring && getBaseUrl() === router) {
                 uplinkStatus.textContent = `پینگ همگانی پایان یافت · ${done} از ${cards.length} اینترفیس بررسی شد.`;
@@ -7291,7 +7393,7 @@
     }
 
     async function runInterfaceAction(action, successMessage) {
-        if (!monitoring || interfaceBusy || relayBusy || interfacePingAllBusy) return;
+        if (!monitoring || interfaceBusy || relayBusy || interfacePingAllBusy || interfaceIpLookupBusy) return;
         interfaceBusy = true;
         relayBusy = true;
         interfaceCards.inert = true;
@@ -7611,6 +7713,7 @@
         await deleteById(wireguardPath, iface['.id']);
         peerTests.delete(iface.name);
         peerTrafficTests.delete(iface.name);
+        interfacePublicIps.delete(iface.name);
         for (const peer of peers.filter(row => row.interface === iface.name)) await deleteById(wireguardPeersPath, peer['.id']);
         for (const address of addresses) await deleteById(address.path, address['.id']);
         for (const nat of nats.filter(row => row['out-interface'] === iface.name && row.comment === 'Exitflow Mullvad uplink')) {
@@ -7748,6 +7851,7 @@
             await applyExitConfig(config, name, target);
             peerTests.delete(target.name);
             peerTrafficTests.delete(target.name);
+            interfacePublicIps.delete(target.name);
             interfaceEditor.close();
             await loadInterfacePanel();
             uplinkStatus.textContent = 'تغییرات ' + name + ' ذخیره شد.';
@@ -7799,7 +7903,7 @@
         const status = document.getElementById('exitConfigStatus');
         const button = form.querySelector('button');
         if (button.disabled) return;
-        if (interfaceBusy || relayBusy || interfacePingAllBusy) {
+        if (interfaceBusy || relayBusy || interfacePingAllBusy || interfaceIpLookupBusy) {
             status.textContent = 'پس از پایان تغییر مسیر دوباره تلاش کنید.';
             return;
         }

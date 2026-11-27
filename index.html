@@ -90,8 +90,8 @@
         .account-menu { position: relative; }
         .account-menu summary { cursor: pointer; padding: 6px; }
         .account-actions { position: absolute; z-index: 30; inset-inline-end: 0; top: 100%; display: grid; gap: 6px; min-width: 110px; padding: 8px; background: #152033; border: 1px solid var(--border); border-radius: 8px; }
-        #peerResetDialog { width: min(420px, calc(100% - 32px)); background: #152033; color: inherit; border: 1px solid var(--border); border-radius: 12px; padding: 18px; }
-        #peerResetDialog::backdrop { background: #080d17b3; }
+        #interfaceEditor, #peerResetDialog { width: min(420px, calc(100% - 32px)); background: #152033; color: inherit; border: 1px solid var(--border); border-radius: 12px; padding: 18px; }
+        #interfaceEditor::backdrop, #peerResetDialog::backdrop { background: #080d17b3; }
         #peerResetForm { display: grid; gap: 10px; }
         .status-strip {
             background: var(--card);
@@ -795,6 +795,15 @@
         .client-filters summary { cursor: pointer; font-weight: 700; }
         .client-filter-fields { display: grid; grid-template-columns: minmax(0, 2fr) 1fr auto auto; gap: 10px; align-items: end; margin-top: 10px; }
         .client-filter-fields > label:not(.switch) { display: grid; gap: 4px; color: var(--muted); font-size: 12px; }
+        #interfaceCards { margin-top: 12px; }
+        #interfaceCards .relay-icon[aria-pressed="true"] { background: #1e4432; color: #87ecb8; border-color: #43855b; opacity: 1; }
+        #interfaceEditor { width: min(650px, 94vw); max-height: 90vh; overflow: auto; }
+        #interfaceEditor fieldset { min-width: 0; margin: 12px 0; padding: 12px; border: 1px solid var(--border); border-radius: 8px; }
+        #interfaceEditor [hidden] { display: none; }
+        #interfaceEditor .interface-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(170px, 100%), 1fr)); gap: 10px; }
+        #interfaceEditor .interface-wide { grid-column: 1 / -1; }
+        #interfaceEditor input:not([type="checkbox"]), #interfaceEditor textarea { display: block; width: 100%; }
+        #interfaceEditor input[type="checkbox"] { width: auto; }
         .client-cards > .empty { grid-column: 1 / -1; }
         .client-card { display: flex; flex-direction: column; gap: 10px; padding: 13px; min-width: 0; background: #142032; border: 1px solid var(--border); border-radius: 12px; }
         .client-card.is-self { border-color: #317999; }
@@ -1034,13 +1043,8 @@
                 </form>
                 <p id="exitConfigStatus" role="status"></p>
             </section>
-            <form id="mullvadUpstreamForm" class="relay-settings-panel">
-                <h3>مسیر پیش‌فرض ترافیک اینترفیس‌های مولواد</h3>
-                <label for="mullvadUpstream">اینترفیس خروجی</label>
-                <select id="mullvadUpstream" dir="ltr" required></select>
-                <button type="submit">ذخیره مسیر</button>
-                <p id="mullvadUpstreamStatus" role="status"></p>
-            </form>
+            <p id="mullvadUpstreamStatus" role="status"></p>
+            <div id="interfaceCards" class="client-cards"></div>
         </section>
     </div>
 
@@ -1257,6 +1261,43 @@
         </div>
     </div>
 </div>
+
+<dialog id="interfaceEditor" aria-labelledby="interfaceEditorTitle">
+    <form id="interfaceEditForm">
+        <header><h2 id="interfaceEditorTitle">ویرایش اینترفیس</h2></header>
+        <label class="field" for="interfaceEditMode">روش ویرایش</label>
+        <select id="interfaceEditMode">
+            <option value="manual">ویرایش دستی</option>
+            <option value="file">جایگزینی کانفیگ از فایل</option>
+        </select>
+        <label class="field" for="interfaceEditName">نام اینترفیس</label>
+        <input id="interfaceEditName" name="name" dir="ltr" maxlength="63" required>
+        <fieldset id="interfaceEditFileFields" hidden disabled>
+            <legend>فایل WireGuard</legend>
+            <input id="interfaceEditFile" type="file" accept=".conf,.ini,text/plain" aria-label="فایل کانفیگ" required>
+        </fieldset>
+        <fieldset id="interfaceEditManualFields">
+            <legend>اینترفیس</legend>
+            <div class="interface-fields">
+                <label>MTU<input name="mtu" type="number" min="68" max="65535" required></label>
+                <label>Listen port<input name="listen-port" type="number" min="1" max="65535" required></label>
+                <label class="interface-wide">Private key
+                    <input name="private-key" type="password" dir="ltr" autocomplete="new-password" placeholder="برای حفظ کلید فعلی خالی بگذارید">
+                </label>
+                <label class="interface-wide">آدرس‌های IPv4 و IPv6
+                    <textarea name="addresses" dir="ltr" rows="3" placeholder="هر آدرس با پیشوند در یک خط"></textarea>
+                </label>
+                <label><input name="disabled" type="checkbox"> اینترفیس غیرفعال</label>
+            </div>
+            <div id="interfacePeerEditors"></div>
+        </fieldset>
+        <p id="interfaceEditStatus" role="status"></p>
+        <footer class="relay-actions">
+            <button type="submit">ذخیره تغییرات</button>
+            <button id="interfaceEditCancel" type="button">انصراف</button>
+        </footer>
+    </form>
+</dialog>
 
 <dialog id="peerResetDialog" aria-labelledby="peerResetTitle">
     <form id="peerResetForm">
@@ -1600,6 +1641,8 @@
     function forceLogout(reasonMessage = '', isError = false) {
         stopLiveTimer();
         monitoring = false;
+        interfaceCards.replaceChildren();
+        if (interfaceEditor.open) interfaceEditor.close();
         mullvadUpstream = 'exit';
         upstreamInterfaces.clear();
         isLive = false;
@@ -5985,6 +6028,7 @@
             restart: 'M20 7v5h-5 M20 12a8 8 0 1 0-2 5',
             remove: 'M3 6h18 M9 6V3h6v3 M6 6l1 15h10l1-15 M10 10v7 M14 10v7',
             edit: 'M4 16l-1 5 5-1L21 7l-4-4z M14 6l4 4',
+            route: 'M4 19h5a6 6 0 0 0 6-6V5 M10 10l5-5 5 5 M4 15v8',
             swap: 'M7 7h12l-3.5-3.5 M17 17H5l3.5 3.5',
             traffic: 'M4 8h16 M15 3l5 5-5 5 M20 16H4 M9 11l-5 5 5 5',
             install: 'M12 3v12 M7 10l5 5 5-5 M4 16v5h16v-5',
@@ -7068,10 +7112,12 @@
         }
     }
 
-    const uplinkSelect = document.getElementById('mullvadUpstream');
+    const interfaceCards = document.getElementById('interfaceCards');
     const uplinkStatus = document.getElementById('mullvadUpstreamStatus');
-    const uplinkForm = document.getElementById('mullvadUpstreamForm');
-    const uplinkButton = uplinkForm.querySelector('button');
+    const wireguardPath = '/interface/wireguard';
+    const wireguardPeersPath = wireguardPath + '/peers';
+    let interfaceBusy = false;
+
     const uplinkRoutePath = '/ip/route';
     const uplinkRoutesQuery = '?.proplist=.id,dst-address,gateway,routing-table,dynamic,disabled,comment';
 
@@ -7093,15 +7139,52 @@
 
     async function readUplinks() {
         return Promise.all([
-            apiList('/interface/wireguard?.proplist=.id,name,comment,disabled'),
+            apiList(wireguardPath + '?.proplist=.id,name,comment,disabled,running,listen-port,mtu'),
             apiList(uplinkRoutePath + uplinkRoutesQuery)
         ]);
     }
 
+    function renderInterfaceCards(interfaces) {
+        const cards = interfaces.filter(iface => !/^mv-wg-/i.test(iface.name)).map(iface => {
+            const selected = iface.name === mullvadUpstream;
+            const disabled = isTrue(iface.disabled);
+            const card = document.createElement('article');
+            card.className = 'client-card' + (disabled ? ' is-offline' : '');
+            card.innerHTML = `
+                <header class="client-card-header">
+                    <div><strong dir="ltr"></strong></div>
+                    <span class="badge">${disabled ? 'غیرفعال' : isTrue(iface.running) ? 'فعال' : 'متوقف'}</span>
+                </header>
+                <div class="relay-meta" dir="ltr"></div>
+                <footer class="relay-actions"></footer>`;
+            card.querySelector('strong').textContent = iface.name;
+            card.querySelector('.relay-meta').textContent = 'MTU ' + (iface.mtu || '—') + ' · UDP ' + (iface['listen-port'] || '—');
+            const route = relayIcon(selected ? 'مسیر پیش‌فرض مولواد' : 'تنظیم به عنوان مسیر پیش‌فرض مولواد', 'route', '',
+                () => void runInterfaceAction(() => saveMullvadUpstream(iface.name), 'مسیر پیش‌فرض مولواد ذخیره شد.'), disabled);
+            route.setAttribute('aria-pressed', String(selected));
+            const edit = relayIcon('ویرایش ' + iface.name, 'edit', '',
+                () => void runInterfaceAction(() => openInterfaceEditor(iface)));
+            const remove = relayIcon('حذف ' + iface.name, 'remove', '',
+                () => {
+                    if (!interfaceBusy && !relayBusy && window.confirm('اینترفیس ' + iface.name + ' حذف شود؟')) {
+                        void runInterfaceAction(() => removeUplink(iface), 'اینترفیس حذف شد.');
+                    }
+                });
+            card.querySelector('footer').append(route, edit, remove);
+            return card;
+        });
+        if (!cards.length) {
+            const empty = document.createElement('p');
+            empty.className = 'empty';
+            empty.textContent = 'هنوز اینترفیس خروجی اضافه نشده است.';
+            cards.push(empty);
+        }
+        interfaceCards.replaceChildren(...cards);
+    }
+
     async function loadInterfacePanel() {
-        uplinkButton.disabled = true;
-        uplinkSelect.replaceChildren(new Option('انتخاب اینترفیس', ''));
         if (!monitoring) {
+            interfaceCards.replaceChildren();
             uplinkStatus.textContent = 'ابتدا به روتر متصل شوید.';
             return;
         }
@@ -7112,17 +7195,32 @@
             mullvadUpstream = getMullvadUpstream(interfaces, routes);
             upstreamInterfaces = new Set(interfaces.filter(iface => iface.comment === upstreamInterfaceTag
                 || iface.name === mullvadUpstream).map(iface => iface.name));
-            for (const iface of interfaces.filter(iface => !/^mv-wg-/i.test(iface.name))) {
-                const option = new Option(iface.name + (isTrue(iface.disabled) ? ' · غیرفعال' : ''), iface.name);
-                option.disabled = isTrue(iface.disabled);
-                uplinkSelect.add(option);
-            }
-            const current = [...uplinkSelect.options].some(option => option.value === mullvadUpstream && !option.disabled);
-            uplinkSelect.value = current ? mullvadUpstream : '';
-            uplinkButton.disabled = ![...uplinkSelect.options].some(option => option.value && !option.disabled);
-            uplinkStatus.textContent = current ? 'مسیر فعلی مولواد از ' + mullvadUpstream + ' عبور می‌کند.' : 'یک اینترفیس خروجی فعال انتخاب کنید.';
+            renderInterfaceCards(interfaces);
+            const current = interfaces.find(iface => iface.name === mullvadUpstream && !isTrue(iface.disabled));
+            uplinkStatus.textContent = current ? 'مسیر پیش‌فرض مولواد · ' + current.name : 'مسیر پیش‌فرض مولواد را از روی کارت اینترفیس انتخاب کنید.';
         } catch (error) {
             uplinkStatus.textContent = error.message;
+        }
+    }
+
+    async function runInterfaceAction(action, successMessage) {
+        if (!monitoring || interfaceBusy || relayBusy) return;
+        interfaceBusy = true;
+        relayBusy = true;
+        interfaceCards.inert = true;
+        try {
+            await action();
+            if (successMessage) {
+                await loadInterfacePanel();
+                uplinkStatus.textContent = successMessage;
+                void loadWireguardSection();
+            }
+        } catch (error) {
+            uplinkStatus.textContent = error.message;
+        } finally {
+            interfaceCards.inert = false;
+            interfaceBusy = false;
+            relayBusy = false;
         }
     }
 
@@ -7203,27 +7301,24 @@
         }
     }
 
-    uplinkForm.addEventListener('submit', async event => {
-        event.preventDefault();
-        if (!monitoring || uplinkButton.disabled) return;
-        if (relayBusy || document.querySelector('#exitConfigForm button').disabled) {
-            uplinkStatus.textContent = 'پس از پایان عملیات جاری دوباره تلاش کنید.';
-            return;
+    function parseWireGuardAddress(value, prefixRequired = true) {
+        const match = value.match(/^([^/]+)(?:\/(\d{1,3}))?$/);
+        if (!match || (prefixRequired && match[2] == null)) throw new Error('آدرس IP یا پیشوند نامعتبر است.');
+        let ip = match[1];
+        const ipv6 = ip.includes(':');
+        if (ipv6 && /^[0-9a-f:.]+$/i.test(ip)) {
+            try {
+                ip = new URL('http://[' + ip + ']').hostname.slice(1, -1);
+            } catch {
+                throw new Error('آدرس IPv6 نامعتبر است.');
+            }
+        } else if (!isIpv4(ip)) {
+            throw new Error('آدرس IP نامعتبر است.');
         }
-        uplinkButton.disabled = true;
-        uplinkSelect.disabled = true;
-        relayBusy = true;
-        try {
-            await saveMullvadUpstream(uplinkSelect.value);
-            await loadInterfacePanel();
-        } catch (error) {
-            uplinkStatus.textContent = error.message;
-        } finally {
-            relayBusy = false;
-            uplinkSelect.disabled = false;
-            uplinkButton.disabled = false;
-        }
-    });
+        const prefix = Number(match[2] ?? (ipv6 ? 128 : 32));
+        if (prefix > (ipv6 ? 128 : 32)) throw new Error('پیشوند IP نامعتبر است.');
+        return { address: ip + '/' + prefix, path: ipv6 ? '/ipv6/address' : '/ip/address' };
+    }
 
     function parseExitConfig(text) {
         let section;
@@ -7256,27 +7351,9 @@
         if (!validKey(privateKey) || !validKey(publicKey) || (psk != null && !validKey(psk))) {
             throw new Error('کلیدهای WireGuard در کانفیگ ناقص یا نامعتبرند.');
         }
-        const parseAddress = (value, prefixRequired = true) => {
-            const match = value.match(/^([^/]+)(?:\/(\d{1,3}))?$/);
-            if (!match || (prefixRequired && match[2] == null)) throw new Error('آدرس IP یا پیشوند نامعتبر است.');
-            let ip = match[1];
-            const ipv6 = ip.includes(':');
-            if (ipv6 && /^[0-9a-f:.]+$/i.test(ip)) {
-                try {
-                    ip = new URL('http://[' + ip + ']').hostname.slice(1, -1);
-                } catch {
-                    throw new Error('آدرس IPv6 نامعتبر است.');
-                }
-            } else if (!isIpv4(ip)) {
-                throw new Error('آدرس IP نامعتبر است.');
-            }
-            const prefix = Number(match[2] ?? (ipv6 ? 128 : 32));
-            if (prefix > (ipv6 ? 128 : 32)) throw new Error('پیشوند IP نامعتبر است.');
-            return { address: ip + '/' + prefix, path: ipv6 ? '/ipv6/address' : '/ip/address' };
-        };
         const parseList = (value, required) => {
             if (!value) throw new Error('Address و AllowedIPs در کانفیگ الزامی هستند.');
-            return value.split(',').map(item => parseAddress(item.trim(), required));
+            return value.split(',').map(item => parseWireGuardAddress(item.trim(), required));
         };
         const addresses = [...new Map(parseList(iface.get('address'), true).map(row => [row.address, row])).values()];
         const allowed = parseList(peer.get('allowedips'), false).map(row => row.address);
@@ -7284,7 +7361,7 @@
         const port = Number(endpoint?.[3]);
         if (!endpoint || port < 1 || port > 65535) throw new Error('Endpoint یا پورت آن نامعتبر است.');
         const host = endpoint[1] || endpoint[2];
-        if (endpoint[1]) parseAddress(host, false);
+        if (endpoint[1]) parseWireGuardAddress(host, false);
         const settings = { 'private-key': privateKey };
         for (const [field, property, minimum] of [['listenport', 'listen-port', 1], ['mtu', 'mtu', 68]]) {
             const value = iface.get(field);
@@ -7308,45 +7385,88 @@
         };
     }
 
-    async function applyExitConfig(config, ifaceName) {
-        const ifPath = '/interface/wireguard';
-        const peerPath = ifPath + '/peers';
-        const interfaces = await apiList(ifPath + '?.proplist=.id,name,listen-port');
-        const iface = interfaces.find(row => row.name.toLowerCase() === ifaceName.toLowerCase());
-        if (iface && iface.name !== ifaceName) throw new Error('این نام با حروف کوچک یا بزرگ متفاوت روی روتر وجود دارد.');
-        if (iface && !window.confirm('کانفیگ و آدرس‌های ثابت ' + ifaceName + ' جایگزین می‌شوند. ادامه می‌دهید؟')) return false;
-        let endpointIp = config.host;
-        if (!isIpv4(endpointIp) && !endpointIp.includes(':')) {
-            const resolved = await apiFetch('/resolve', 'POST', { 'domain-name': endpointIp });
-            endpointIp = (Array.isArray(resolved) ? resolved[0]?.ret : resolved?.ret) || '';
-            if (!endpointIp) throw new Error('روتر نتوانست دامنهٔ Endpoint را به IP تبدیل کند.');
+    function validateInterfaceName(name) {
+        if (!/^[A-Za-z0-9_.-]{1,63}$/.test(name) || /^(mv-wg-|main$|mv2tr$)/i.test(name)) {
+            throw new Error('نام اینترفیس نامعتبر یا رزروشده است.');
         }
-        const [peers, routes] = await Promise.all([
-            apiList(peerPath + '?.proplist=.id,interface'),
-            apiList('/ip/route?.proplist=dst-address,gateway,disabled')
-        ]);
-        if (routes.some(route => route['dst-address'] === endpointIp + '/32'
-            && route.gateway === ifaceName && !isTrue(route.disabled))) {
-            throw new Error('IP خود Endpoint از مسیر تونل خروجی روت شده و باعث حلقه می‌شود.');
-        }
-        const currentPeers = peers.filter(row => row.interface === ifaceName);
-        if (currentPeers.length > 1) throw new Error('اینترفیس خروجی بیش از یک Peer دارد.');
-        const families = ['/ip/address', '/ipv6/address'];
-        const currentAddresses = (await Promise.all(families.map(async path => {
+        return name;
+    }
+
+    async function readInterfaceAddresses(name, needsIpv6 = false) {
+        const paths = ['/ip/address', '/ipv6/address'];
+        return (await Promise.all(paths.map(async path => {
             try {
                 const rows = await apiList(path + '?.proplist=.id,interface,address,dynamic,disabled');
-                return rows.filter(row => row.interface === ifaceName && !isTrue(row.dynamic)).map(row => ({ ...row, path }));
+                return rows.filter(row => row.interface === name && !isTrue(row.dynamic)).map(row => ({ ...row, path }));
             } catch (error) {
-                if (path === '/ipv6/address' && /404|unknown/i.test(error.message)
-                    && !config.addresses.some(row => row.path === path)) return [];
+                if (path === '/ipv6/address' && !needsIpv6 && /404|unknown/i.test(error.message)) return [];
                 throw error;
             }
         }))).flat();
+    }
+
+    async function ensureUplinkNameIsUnusedByClients(name) {
+        const [lists, tables] = await Promise.all([
+            apiList('/ip/firewall/address-list?.proplist=list'),
+            apiList('/routing/table?.proplist=name')
+        ]);
+        if (lists.some(row => row.list === name) || tables.some(row => row.name === name)) {
+            throw new Error('اینترفیس در سیاست مسیریابی کلاینت‌ها استفاده می‌شود. ابتدا وابستگی کلاینت‌ها را بردارید.');
+        }
+    }
+
+    async function applyExitConfig(config, name, target = null) {
+        const interfaces = await apiList(wireguardPath + '?.proplist=.id,name,listen-port,disabled');
+        const iface = target ? interfaces.find(row => row['.id'] === target['.id'])
+            : interfaces.find(row => row.name === name);
+        if (target && (!iface || iface.name !== target.name)) throw new Error('اینترفیس تغییر کرده است. دوباره آن را برای ویرایش باز کنید.');
+        if (iface && !target && !window.confirm('کانفیگ اینترفیس ' + name + ' جایگزین شود؟')) return false;
+        const ifaceName = iface?.name || name;
+        if (interfaces.some(row => row['.id'] !== iface?.['.id'] && row.name.toLowerCase() === name.toLowerCase())) {
+            throw new Error('این نام روی روتر وجود دارد. برای تغییر کانفیگ از ویرایش کارت استفاده کنید.');
+        }
+        const [peers, routes, currentAddresses] = await Promise.all([
+            apiList(wireguardPeersPath + '?.proplist=.id,interface,endpoint-address,disabled'),
+            apiList(uplinkRoutePath + uplinkRoutesQuery),
+            iface ? readInterfaceAddresses(ifaceName, config.addresses.some(row => row.path === '/ipv6/address')) : []
+        ]);
+        const currentPeers = peers.filter(row => row.interface === ifaceName);
+        if (ifaceName !== name) await ensureUplinkNameIsUnusedByClients(ifaceName);
+        const newPort = config.settings['listen-port'];
+        if (newPort && interfaces.some(row => row['.id'] !== iface?.['.id'] && Number(row['listen-port']) === Number(newPort))) {
+            throw new Error('این پورت WireGuard روی اینترفیس دیگری استفاده می‌شود.');
+        }
+        const currentUplink = getMullvadUpstream(interfaces, routes);
+        const editingDefault = iface && currentUplink === ifaceName;
+        const updates = config.peers ?? [{ fields: config.peer, id: currentPeers[0]?.['.id'] }];
+        if (!config.peers && currentPeers.length > 1) throw new Error('اینترفیس چند Peer دارد. برای ویرایش جداگانه از حالت دستی استفاده کنید.');
+        if (config.peers && (updates.length !== currentPeers.length
+            || updates.some(update => !currentPeers.some(peer => peer['.id'] === update.id)))) {
+            throw new Error('فهرست Peerها تغییر کرده است. دوباره فرم ویرایش را باز کنید.');
+        }
+        if (editingDefault && (isTrue(config.settings.disabled) || (updates.length && updates.every(update => isTrue(update.fields.disabled))))
+            && routes.some(route => route.gateway === ifaceName && (isMullvadDefaultRoute(route) || isDirectMullvadEndpointRoute(route)))) {
+            throw new Error('ابتدا مسیر پیش‌فرض مولواد را به اینترفیس دیگری منتقل کنید.');
+        }
+        for (const { fields, id } of updates) {
+            let endpointIp = fields['endpoint-address'];
+            const oldEndpoint = currentPeers.find(peer => peer['.id'] === id)?.['endpoint-address'];
+            if (!endpointIp || (config.peers && endpointIp === oldEndpoint)) continue;
+            if (!isIpv4(endpointIp) && !endpointIp.includes(':')) {
+                const resolved = await apiFetch('/resolve', 'POST', { 'domain-name': endpointIp });
+                endpointIp = (Array.isArray(resolved) ? resolved[0]?.ret : resolved?.ret) || '';
+                if (!endpointIp) throw new Error('روتر نتوانست دامنهٔ Endpoint را به IP تبدیل کند.');
+            }
+            if (routes.some(route => route['dst-address'] === endpointIp + '/32'
+                && route.gateway === ifaceName && !isTrue(route.disabled))) {
+                throw new Error('IP خود Endpoint از مسیر تونل خروجی روت شده و باعث حلقه می‌شود.');
+            }
+        }
 
         let stage = 'ساخت اینترفیس خروجی';
         try {
             if (!iface) {
-                await apiFetch(ifPath, 'PUT', {
+                await apiFetch(wireguardPath, 'PUT', {
                     'listen-port': config.settings['listen-port'] ?? availableWireGuardPort(interfaces),
                     ...config.settings, name: ifaceName, comment: upstreamInterfaceTag
                 });
@@ -7359,28 +7479,194 @@
                     if (row.path === '/ipv6/address') fields.advertise = 'no';
                     await apiFetch(row.path, 'PUT', fields);
                 }
-                else if (isTrue(current.disabled)) {
+                else if (!config.peers && isTrue(current.disabled)) {
                     await apiFetch(row.path + '/' + assertId(current['.id']), 'PATCH', { disabled: 'no' });
                 }
             }
             if (iface) {
-                stage = 'کلید و نام اینترفیس';
-                await apiFetch(ifPath + '/' + assertId(iface['.id']), 'PATCH', config.settings);
+                stage = 'تنظیمات اینترفیس';
+                await apiFetch(wireguardPath + '/' + assertId(iface['.id']), 'PATCH', config.settings);
             }
             stage = 'تنظیمات Peer';
-            if (currentPeers.length) {
-                await apiFetch(peerPath + '/' + assertId(currentPeers[0]['.id']), 'PATCH', config.peer);
-            } else {
-                await apiFetch(peerPath, 'PUT', { ...config.peer, interface: ifaceName });
+            for (const { id, fields } of updates) {
+                if (id) await apiFetch(wireguardPeersPath + '/' + assertId(id), 'PATCH', fields);
+                else await apiFetch(wireguardPeersPath, 'PUT', { ...fields, interface: ifaceName });
             }
             stage = 'حذف آدرس‌های قبلی';
             for (const row of currentAddresses) {
                 if (!config.addresses.some(item => item.address === row.address)) await deleteById(row.path, row['.id']);
             }
+            if (ifaceName !== name) {
+                stage = 'تغییر نام اینترفیس';
+                await apiFetch(wireguardPath + '/' + assertId(iface['.id']), 'PATCH', { name });
+            }
         } catch {
             throw new Error('اعمال کانفیگ در مرحلهٔ «' + stage + '» متوقف شد. ممکن است مراحل قبلی اعمال شده باشند.');
         }
     }
+
+    async function removeUplink(target) {
+        const [[interfaces, routes], peers, addresses, nats] = await Promise.all([
+            readUplinks(),
+            apiList(wireguardPeersPath + '?.proplist=.id,interface'),
+            readInterfaceAddresses(target.name),
+            apiList('/ip/firewall/nat?.proplist=.id,out-interface,comment')
+        ]);
+        const iface = interfaces.find(row => row['.id'] === target['.id'] && row.name === target.name);
+        if (!iface) throw new Error('اینترفیس تغییر کرده است. فهرست را دوباره باز کنید.');
+        const dependentRoutes = routes.filter(route => !isTrue(route.dynamic) && route.gateway === iface.name);
+        if (dependentRoutes.some(route => isMullvadDefaultRoute(route) || isDirectMullvadEndpointRoute(route))
+            || (getMullvadUpstream(interfaces, routes) === iface.name && peers.some(peer => /^mv-wg-/.test(peer.interface)))) {
+            throw new Error('ابتدا مسیر پیش‌فرض مولواد را به اینترفیس دیگری منتقل کنید.');
+        }
+        if (dependentRoutes.length) throw new Error('این اینترفیس در مسیرهای روتر استفاده می‌شود. ابتدا مسیرهای وابسته را تغییر دهید.');
+        await ensureUplinkNameIsUnusedByClients(iface.name);
+        await deleteById(wireguardPath, iface['.id']);
+        for (const peer of peers.filter(row => row.interface === iface.name)) await deleteById(wireguardPeersPath, peer['.id']);
+        for (const address of addresses) await deleteById(address.path, address['.id']);
+        for (const nat of nats.filter(row => row['out-interface'] === iface.name && row.comment === 'Exitflow Mullvad uplink')) {
+            await deleteById('/ip/firewall/nat', nat['.id']);
+        }
+    }
+
+    const interfaceEditor = document.getElementById('interfaceEditor');
+    const interfaceEditForm = document.getElementById('interfaceEditForm');
+    const interfaceEditMode = document.getElementById('interfaceEditMode');
+    const interfaceEditFile = document.getElementById('interfaceEditFile');
+    const interfaceEditStatus = document.getElementById('interfaceEditStatus');
+    const interfacePeerEditors = document.getElementById('interfacePeerEditors');
+    const interfaceEditCancel = document.getElementById('interfaceEditCancel');
+    const interfaceEditSubmit = interfaceEditForm.querySelector('[type="submit"]');
+    let interfaceEditTarget = null;
+
+    function paintInterfaceEditMode() {
+        const fromFile = interfaceEditMode.value === 'file';
+        const fileFields = document.getElementById('interfaceEditFileFields');
+        const manualFields = document.getElementById('interfaceEditManualFields');
+        fileFields.hidden = fileFields.disabled = !fromFile;
+        manualFields.hidden = manualFields.disabled = fromFile;
+        interfaceEditStatus.textContent = '';
+    }
+
+    function makePeerEditor(peer) {
+        const group = document.createElement('fieldset');
+        group.dataset.peerId = peer['.id'];
+        group.innerHTML = `
+            <legend>Peer</legend>
+            <div class="interface-fields">
+                <label class="interface-wide">Public key<input name="public-key" dir="ltr" required></label>
+                <label class="interface-wide">Preshared key
+                    <input name="preshared-key" type="password" dir="ltr" autocomplete="new-password" placeholder="برای حفظ کلید فعلی خالی بگذارید">
+                </label>
+                <label class="interface-wide"><input name="clear-preshared-key" type="checkbox"> حذف کلید مشترک</label>
+                <label>Endpoint<input name="endpoint-address" dir="ltr"></label>
+                <label>Endpoint port<input name="endpoint-port" type="number" min="0" max="65535"></label>
+                <label class="interface-wide">Allowed IPs<textarea name="allowed-address" dir="ltr" rows="2" required></textarea></label>
+                <label>Persistent keepalive (ثانیه)<input name="persistent-keepalive" type="number" min="0" max="65535" required></label>
+                <label><input name="disabled" type="checkbox"> پیر غیرفعال</label>
+            </div>`;
+        for (const input of group.querySelectorAll('[name]')) {
+            if (input.name === 'preshared-key' || input.name === 'clear-preshared-key') continue;
+            if (input.type === 'checkbox') input.checked = isTrue(peer[input.name]);
+            else if (input.name === 'persistent-keepalive') {
+                input.value = String(Math.round((parseRosDuration(peer[input.name]) || 0)));
+            } else {
+                input.value = peer[input.name] ?? '';
+            }
+        }
+        return group;
+    }
+
+    async function openInterfaceEditor(target) {
+        const [[interfaces], peers, addresses] = await Promise.all([
+            readUplinks(),
+            apiList(wireguardPeersPath + '?.proplist=.id,interface,public-key,endpoint-address,endpoint-port,allowed-address,persistent-keepalive,disabled'),
+            readInterfaceAddresses(target.name)
+        ]);
+        const iface = interfaces.find(row => row['.id'] === target['.id'] && row.name === target.name);
+        if (!iface || !monitoring) throw new Error('اینترفیس در روتر پیدا نشد.');
+        interfaceEditTarget = iface;
+        interfaceEditForm.reset();
+        const fields = interfaceEditForm.elements;
+        fields.namedItem('name').value = iface.name;
+        fields.namedItem('mtu').value = iface.mtu ?? '';
+        fields.namedItem('listen-port').value = iface['listen-port'] ?? '';
+        fields.namedItem('disabled').checked = isTrue(iface.disabled);
+        fields.namedItem('addresses').value = addresses.map(row => row.address).join('\n');
+        interfacePeerEditors.replaceChildren(...peers.filter(peer => peer.interface === iface.name).map(makePeerEditor));
+        paintInterfaceEditMode();
+        interfaceEditor.showModal();
+    }
+
+    function readManualInterfaceConfig() {
+        const fields = new FormData(interfaceEditForm);
+        const settings = { mtu: fields.get('mtu'), 'listen-port': fields.get('listen-port'), disabled: fields.has('disabled') ? 'yes' : 'no' };
+        const key = value => {
+            if (!/^[A-Za-z0-9+/]{43}=$/.test(value)) throw new Error('فرمت یکی از کلیدهای WireGuard نامعتبر است.');
+            return value;
+        };
+        const privateKey = fields.get('private-key').trim();
+        if (privateKey) settings['private-key'] = key(privateKey);
+        const addresses = fields.get('addresses').split(/[\s,]+/).filter(Boolean).map(value => parseWireGuardAddress(value));
+        const peers = [...interfacePeerEditors.children].map(group => {
+            const field = name => group.querySelector('[name="' + name + '"]');
+            const value = name => field(name).value.trim();
+            const endpoint = value('endpoint-address');
+            const port = value('endpoint-port');
+            if (endpoint.includes(':')) parseWireGuardAddress(endpoint, false);
+            else if (endpoint && !/^[a-z0-9.-]+$/i.test(endpoint)) throw new Error('آدرس Endpoint نامعتبر است.');
+            if (endpoint && !Number(port)) throw new Error('برای آدرس Endpoint پورت معتبر وارد کنید.');
+            const allowed = value('allowed-address').split(/[\s,]+/).filter(Boolean)
+                .map(address => parseWireGuardAddress(address, false).address);
+            if (!allowed.length) throw new Error('برای هر Peer دست‌کم یک Allowed IP وارد کنید.');
+            const peer = {
+                'public-key': key(value('public-key')), 'endpoint-address': endpoint, 'endpoint-port': port || '0',
+                'allowed-address': allowed.join(','), 'persistent-keepalive': value('persistent-keepalive') + 's',
+                disabled: field('disabled').checked ? 'yes' : 'no'
+            };
+            const psk = value('preshared-key');
+            if (psk && field('clear-preshared-key').checked) throw new Error('برای کلید مشترک، حذف یا جایگزینی را انتخاب کنید.');
+            if (psk) peer['preshared-key'] = key(psk);
+            else if (field('clear-preshared-key').checked) peer['preshared-key'] = '';
+            return { id: group.dataset.peerId, fields: peer };
+        });
+        return { settings, addresses: [...new Map(addresses.map(row => [row.address, row])).values()], peers };
+    }
+
+    interfaceEditMode.addEventListener('change', paintInterfaceEditMode);
+    interfaceEditCancel.addEventListener('click', () => interfaceEditor.close());
+    interfaceEditor.addEventListener('cancel', event => {
+        if (interfaceEditSubmit.disabled) event.preventDefault();
+    });
+    interfaceEditor.addEventListener('close', () => {
+        interfaceEditForm.reset();
+        interfacePeerEditors.replaceChildren();
+        interfaceEditTarget = null;
+    });
+    interfaceEditForm.addEventListener('submit', async event => {
+        event.preventDefault();
+        if (!interfaceEditTarget || interfaceBusy || relayBusy || !monitoring) return;
+        interfaceBusy = relayBusy = true;
+        interfaceEditSubmit.disabled = interfaceEditCancel.disabled = true;
+        interfaceEditStatus.textContent = 'در حال ذخیره روی روتر…';
+        try {
+            const name = validateInterfaceName(interfaceEditForm.elements.namedItem('name').value.trim());
+            const file = interfaceEditFile.files[0];
+            const fromFile = interfaceEditMode.value === 'file';
+            if (fromFile && (!file || file.size > 65536)) throw new Error('یک فایل کانفیگ حداکثر ۶۴ کیلوبایتی انتخاب کنید.');
+            const config = fromFile ? parseExitConfig(await file.text()) : readManualInterfaceConfig();
+            await applyExitConfig(config, name, interfaceEditTarget);
+            interfaceEditor.close();
+            await loadInterfacePanel();
+            uplinkStatus.textContent = 'تغییرات ' + name + ' ذخیره شد.';
+            void loadWireguardSection();
+        } catch (error) {
+            interfaceEditStatus.textContent = error.message;
+        } finally {
+            interfaceBusy = relayBusy = false;
+            interfaceEditSubmit.disabled = interfaceEditCancel.disabled = false;
+        }
+    });
 
     const exitInterfaceName = document.getElementById('exitInterfaceName');
     const exitDrop = document.querySelector('.exit-drop');
@@ -7421,7 +7707,7 @@
         const status = document.getElementById('exitConfigStatus');
         const button = form.querySelector('button');
         if (button.disabled) return;
-        if (uplinkSelect.disabled) {
+        if (interfaceBusy || relayBusy) {
             status.textContent = 'پس از پایان تغییر مسیر دوباره تلاش کنید.';
             return;
         }
@@ -7435,12 +7721,12 @@
             return;
         }
         button.disabled = true;
+        interfaceBusy = true;
+        relayBusy = true;
+        interfaceCards.inert = true;
         try {
             const config = parseExitConfig(await file.text());
-            const name = exitInterfaceName.value.trim();
-            if (!/^[A-Za-z0-9_.-]{1,63}$/.test(name) || /^(mv-wg-|main$|mv2tr$)/i.test(name)) {
-                throw new Error('نام اینترفیس نامعتبر یا رزروشده است.');
-            }
+            const name = validateInterfaceName(exitInterfaceName.value.trim());
             status.textContent = 'در حال اعمال کانفیگ روی روتر…';
             if (await applyExitConfig(config, name) === false) {
                 status.textContent = '';
@@ -7450,9 +7736,13 @@
             await loadInterfacePanel();
             field.value = '';
             paintExitFile();
+            void loadWireguardSection();
         } catch (error) {
             status.textContent = error.message;
         } finally {
+            interfaceCards.inert = false;
+            interfaceBusy = false;
+            relayBusy = false;
             button.disabled = false;
         }
     });

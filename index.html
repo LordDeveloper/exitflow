@@ -1029,7 +1029,10 @@
     <div id="tabInterfaces" class="tab-panel" role="tabpanel" hidden>
         <section class="card">
             <section class="relay-settings-panel" aria-label="تنظیمات خروجی">
-                <h2>مدیریت اینترفیس‌ها</h2>
+                <div class="relay-board-head">
+                    <h2>مدیریت اینترفیس‌ها</h2>
+                    <button type="button" id="interfacePingAllBtn" class="info compact" disabled>پینگ همگانی</button>
+                </div>
                 <form id="exitConfigForm" class="exit-config">
                     <label class="exit-drop" for="exitConfigFile">
                         <span class="exit-drop-title">فایل کانفیگ WireGuard</span>
@@ -1542,10 +1545,7 @@
     }
 
     function peerLabel(wg) {
-        if (isExitIfaceName(wg?.name)) {
-            const comment = String(wg.comment || '').trim();
-            return comment || ('تونل خروجی · ' + wg.name);
-        }
+        if (isExitIfaceName(wg?.name)) return wg.name;
         const comment = String(wg.comment || '').trim();
         if (!comment) return wg.name;
         return `${comment} — ${wg.name}`;
@@ -1642,6 +1642,7 @@
         stopLiveTimer();
         monitoring = false;
         interfaceCards.replaceChildren();
+        interfacePingAllBtn.disabled = true;
         if (interfaceEditor.open) interfaceEditor.close();
         mullvadUpstream = 'exit';
         upstreamInterfaces.clear();
@@ -2518,8 +2519,8 @@
             setText(picker.querySelector('.peer-picker-name'), peerLabel(wg));
             setText(picker.querySelector('.peer-picker-meta'), peerMeta(wg));
         } else if (isExitIfaceName(value)) {
-            setText(picker.querySelector('.peer-picker-name'), 'تونل خروجی · ' + value);
-            setText(picker.querySelector('.peer-picker-meta'), 'از طریق exit');
+            setText(picker.querySelector('.peer-picker-name'), value);
+            setText(picker.querySelector('.peer-picker-meta'), 'تونل خروجی');
         } else if (value) {
             setText(picker.querySelector('.peer-picker-name'), value);
             setText(picker.querySelector('.peer-picker-meta'), 'اطلاعات Peer در فهرست فعلی موجود نیست');
@@ -6576,6 +6577,7 @@
     }
 
     function updateRelayCardStats() {
+        updateInterfaceCardStats();
         if (document.getElementById('tabWireguard').hidden) return;
         if (relayPingOrderDirty && !relayBusy
             && !document.querySelector('#relayCatalogRows .relay-edit:not([hidden]), #relayCatalogRows details[open]')) {
@@ -7113,6 +7115,9 @@
     }
 
     const interfaceCards = document.getElementById('interfaceCards');
+    const interfacePingAllBtn = document.getElementById('interfacePingAllBtn');
+    const interfacePingTarget = '1.1.1.1';
+    let interfacePingAllBusy = false;
     const uplinkStatus = document.getElementById('mullvadUpstreamStatus');
     const wireguardPath = '/interface/wireguard';
     const wireguardPeersPath = wireguardPath + '/peers';
@@ -7150,12 +7155,22 @@
             const disabled = isTrue(iface.disabled);
             const card = document.createElement('article');
             card.className = 'client-card' + (disabled ? ' is-offline' : '');
+            card.dataset.uplinkInterface = iface.name;
+            card.dataset.disabled = String(disabled);
             card.innerHTML = `
                 <header class="client-card-header">
                     <div><strong dir="ltr"></strong></div>
                     <span class="badge">${disabled ? 'غیرفعال' : isTrue(iface.running) ? 'فعال' : 'متوقف'}</span>
                 </header>
                 <div class="relay-meta" dir="ltr"></div>
+                <div class="relay-metrics">
+                    <div class="relay-metric-wide"><strong data-uplink-metric="ping">—</strong><span>آخرین پینگ</span></div>
+                </div>
+                <div class="relay-traffic">
+                    <div class="relay-rx"><span>↓ دریافت</span><strong data-uplink-metric="rxSpeed">—</strong><small data-uplink-metric="rx"></small></div>
+                    <div class="relay-tx"><span>↑ ارسال</span><strong data-uplink-metric="txSpeed">—</strong><small data-uplink-metric="tx"></small></div>
+                </div>
+                <div class="relay-meta" data-uplink-metric="test"></div>
                 <footer class="relay-actions"></footer>`;
             card.querySelector('strong').textContent = iface.name;
             card.querySelector('.relay-meta').textContent = 'MTU ' + (iface.mtu || '—') + ' · UDP ' + (iface['listen-port'] || '—');
@@ -7170,7 +7185,11 @@
                         void runInterfaceAction(() => removeUplink(iface), 'اینترفیس حذف شد.');
                     }
                 });
-            card.querySelector('footer').append(route, edit, remove);
+            const ping = relayIcon('تست پینگ از اینترفیس', 'ping', 'info',
+                () => testPeerPath(iface.name, null, interfacePingTarget), disabled, iface.name);
+            const traffic = relayIcon('تست ترافیک', 'traffic', 'info',
+                () => testPeerTraffic(iface.name), disabled, iface.name);
+            card.querySelector('footer').append(route, ping, traffic, edit, remove);
             return card;
         });
         if (!cards.length) {
@@ -7180,7 +7199,75 @@
             cards.push(empty);
         }
         interfaceCards.replaceChildren(...cards);
+        updateInterfaceCardStats();
     }
+
+    function interfacePingText(test) {
+        if (test?.state === 'running') return 'در حال پینگ…';
+        if (test?.state === 'fail') return 'بی‌پاسخ';
+        if (test?.state === 'error') return 'خطای تست';
+        if (test?.state === 'ok') return test.avg || 'پاسخ دریافت شد';
+        return '—';
+    }
+
+    function updateInterfaceCardStats() {
+        const cards = interfaceCards.querySelectorAll('[data-uplink-interface]');
+        const models = new Map(wgCatalog.map(model => [model.name, model]));
+        const targetBusy = peerPingTargetBusy(interfacePingTarget);
+        const testing = interfacePingAllBusy || targetBusy;
+        interfacePingAllBtn.disabled = !monitoring || testing
+            || ![...cards].some(card => card.dataset.disabled === 'false');
+        for (const card of cards) {
+            const name = card.dataset.uplinkInterface;
+            const model = models.get(name);
+            const ping = peerTests.get(name);
+            const traffic = peerTrafficTests.get(name);
+            const stats = model?.stats;
+            const values = {
+                ping: interfacePingText(ping),
+                rxSpeed: stats ? formatSpeed(stats.rxSpeed) : '—',
+                txSpeed: stats ? formatSpeed(stats.txSpeed) : '—',
+                rx: stats ? formatBytes(stats.rx) : '',
+                tx: stats ? formatBytes(stats.tx) : '',
+                test: traffic?.running ? 'در حال تست ترافیک…' : traffic?.text || ''
+            };
+            for (const field of card.querySelectorAll('[data-uplink-metric]')) {
+                setText(field, values[field.dataset.uplinkMetric]);
+                field.hidden = field.dataset.uplinkMetric === 'test' && !values.test;
+            }
+            card.querySelector('[data-uplink-metric="ping"]').title = ping?.text || '';
+            for (const button of card.querySelectorAll('[data-icon="ping"], [data-icon="traffic"]')) {
+                button.disabled = card.dataset.disabled === 'true' || testing
+                    || ping?.state === 'running' || Boolean(traffic?.running);
+            }
+        }
+    }
+
+    interfacePingAllBtn.addEventListener('click', async () => {
+        if (!monitoring || interfacePingAllBusy || interfaceBusy || relayBusy || peerPingTargetBusy(interfacePingTarget)) return;
+        const cards = [...interfaceCards.querySelectorAll('[data-uplink-interface][data-disabled="false"]')];
+        if (!cards.length) return;
+        const router = getBaseUrl();
+        interfacePingAllBusy = true;
+        updateInterfaceCardStats();
+        let done = 0;
+        try {
+            for (const [index, card] of cards.entries()) {
+                if (!monitoring || getBaseUrl() !== router) return;
+                const name = card.dataset.uplinkInterface;
+                uplinkStatus.textContent = `پینگ همگانی · ${index + 1} از ${cards.length} · ${name}`;
+                const previous = peerTests.get(name);
+                await testPeerPath(name, null, interfacePingTarget, null, { quiet: true });
+                if (peerTests.get(name) !== previous) done += 1;
+            }
+            if (monitoring && getBaseUrl() === router) {
+                uplinkStatus.textContent = `پینگ همگانی پایان یافت · ${done} از ${cards.length} اینترفیس بررسی شد.`;
+            }
+        } finally {
+            interfacePingAllBusy = false;
+            updateInterfaceCardStats();
+        }
+    });
 
     async function loadInterfacePanel() {
         if (!monitoring) {
@@ -7204,7 +7291,7 @@
     }
 
     async function runInterfaceAction(action, successMessage) {
-        if (!monitoring || interfaceBusy || relayBusy) return;
+        if (!monitoring || interfaceBusy || relayBusy || interfacePingAllBusy) return;
         interfaceBusy = true;
         relayBusy = true;
         interfaceCards.inert = true;
@@ -7522,6 +7609,8 @@
         if (dependentRoutes.length) throw new Error('این اینترفیس در مسیرهای روتر استفاده می‌شود. ابتدا مسیرهای وابسته را تغییر دهید.');
         await ensureUplinkNameIsUnusedByClients(iface.name);
         await deleteById(wireguardPath, iface['.id']);
+        peerTests.delete(iface.name);
+        peerTrafficTests.delete(iface.name);
         for (const peer of peers.filter(row => row.interface === iface.name)) await deleteById(wireguardPeersPath, peer['.id']);
         for (const address of addresses) await deleteById(address.path, address['.id']);
         for (const nat of nats.filter(row => row['out-interface'] === iface.name && row.comment === 'Exitflow Mullvad uplink')) {
@@ -7655,7 +7744,10 @@
             const fromFile = interfaceEditMode.value === 'file';
             if (fromFile && (!file || file.size > 65536)) throw new Error('یک فایل کانفیگ حداکثر ۶۴ کیلوبایتی انتخاب کنید.');
             const config = fromFile ? parseExitConfig(await file.text()) : readManualInterfaceConfig();
-            await applyExitConfig(config, name, interfaceEditTarget);
+            const target = interfaceEditTarget;
+            await applyExitConfig(config, name, target);
+            peerTests.delete(target.name);
+            peerTrafficTests.delete(target.name);
             interfaceEditor.close();
             await loadInterfacePanel();
             uplinkStatus.textContent = 'تغییرات ' + name + ' ذخیره شد.';
@@ -7707,7 +7799,7 @@
         const status = document.getElementById('exitConfigStatus');
         const button = form.querySelector('button');
         if (button.disabled) return;
-        if (interfaceBusy || relayBusy) {
+        if (interfaceBusy || relayBusy || interfacePingAllBusy) {
             status.textContent = 'پس از پایان تغییر مسیر دوباره تلاش کنید.';
             return;
         }

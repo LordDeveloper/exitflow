@@ -6632,7 +6632,7 @@
         if (!route || route['routing-table'] !== 'main' || isTrue(route.disabled)) return false;
         if (!String(route['dst-address'] || '').endsWith('/32')) return false;
         const tag = String(route.comment || '');
-        return tag.startsWith(relayEndpointRouteTag) || tag === 'Mullvad endpoint via exit';
+        return tag.startsWith(relayEndpointRouteTag) || /^Mullvad endpoint via (exit|totr)$/i.test(tag);
     }
 
     function credentialComment(id, name) {
@@ -7181,9 +7181,7 @@
                 () => void runInterfaceAction(() => openInterfaceEditor(iface)));
             const remove = relayIcon('حذف ' + iface.name, 'remove', '',
                 () => {
-                    if (!interfaceBusy && !relayBusy && window.confirm('اینترفیس ' + iface.name + ' حذف شود؟')) {
-                        void runInterfaceAction(() => removeUplink(iface), 'اینترفیس حذف شد.');
-                    }
+                    void runInterfaceAction(() => removeUplink(iface), 'اینترفیس حذف شد.');
                 });
             const ping = relayIcon('تست پینگ از اینترفیس', 'ping', 'info',
                 () => testPeerPath(iface.name, null, interfacePingTarget), disabled, iface.name);
@@ -7296,8 +7294,8 @@
         relayBusy = true;
         interfaceCards.inert = true;
         try {
-            await action();
-            if (successMessage) {
+            const result = await action();
+            if (successMessage && result !== false) {
                 await loadInterfacePanel();
                 uplinkStatus.textContent = successMessage;
                 void loadWireguardSection();
@@ -7321,7 +7319,7 @@
         if (/^mv-wg-/i.test(name) || !interfaces.some(iface => iface.name === name && !isTrue(iface.disabled))) {
             throw new Error('یک اینترفیس WireGuard فعال انتخاب کنید.');
         }
-        const previous = getMullvadUpstream(interfaces, routes);
+        const uplinks = new Set(interfaces.filter(iface => !/^mv-wg-/i.test(iface.name)).map(iface => iface.name));
         const selectedPeers = peers.filter(peer => peer.interface === name && !isTrue(peer.disabled));
         if (!selectedPeers.length) throw new Error('اینترفیس انتخاب‌شده باید حداقل یک Peer فعال داشته باشد.');
         const endpointsOf = peer => [peer['endpoint-address'], peer['current-endpoint-address']].map(ipOnly).filter(isIpv4);
@@ -7331,8 +7329,9 @@
         const defaults = enabled.filter(isMullvadDefaultRoute);
         const endpointRoutes = enabled.filter(route => !isTrue(route.dynamic)
             && (isDirectMullvadEndpointRoute(route)
-                || (route.gateway === previous && normPrefix(route['dst-address']).endsWith('/32')
-                    && (route['routing-table'] === 'mv2tr'
+                || (uplinks.has(route.gateway) && normPrefix(route['dst-address']).endsWith('/32')
+                    && ((route['routing-table'] === 'mv2tr' && (/^MVIP via /i.test(route.comment || '')
+                            || relayPrefixes.has(normPrefix(route['dst-address']))))
                         || (route['routing-table'] === 'main' && relayPrefixes.has(normPrefix(route['dst-address'])))))));
         const targetPrefixes = new Set([...relayPrefixes, ...endpointRoutes.map(route => normPrefix(route['dst-address']))]);
         const ownPrefixes = selectedPeers.flatMap(endpointsOf).map(ip => ip + '/32');
@@ -7347,7 +7346,8 @@
             && endpointKeys.has(route['routing-table'] + ':' + normPrefix(route['dst-address'])))) {
             throw new Error('یک مسیر دیگر برای Endpoint مولواد با این انتخاب تداخل دارد.');
         }
-        if (defaults.some(route => ![previous, name].includes(route.gateway) && route.comment !== upstreamRouteTag)) {
+        if (defaults.some(route => !uplinks.has(route.gateway) && route.comment !== upstreamRouteTag
+            && !/^(default|Mullvad Route) via (exit|totr)$/i.test(route.comment || ''))) {
             throw new Error('جدول mv2tr مسیر پیش‌فرض دیگری دارد. تداخل مسیر را روی روتر بررسی کنید.');
         }
 
@@ -7361,15 +7361,25 @@
                 });
             }
             await ensureFibTable('mv2tr');
-            const primary = defaults.find(route => route.comment === upstreamRouteTag) || defaults[0];
-            for (const route of [...endpointRoutes, ...defaults.filter(route => route !== primary), ...(primary ? [primary] : [])]) {
-                if (route.gateway === name && (route !== primary || route.comment === upstreamRouteTag)) continue;
+            const primary = defaults.find(route => route.comment === upstreamRouteTag)
+                || defaults.find(route => route.gateway === name) || defaults[0];
+            async function changeRoute(route, patch) {
                 const path = uplinkRoutePath + '/' + assertId(route['.id']);
-                const patch = route === primary ? { gateway: name, comment: upstreamRouteTag } : { gateway: name };
-                updated.push({ path, gateway: route.gateway, ...(route === primary ? { comment: route.comment || '' } : {}) });
+                const original = { gateway: route.gateway, comment: route.comment || '', disabled: isTrue(route.disabled) ? 'yes' : 'no' };
+                updated.push({ path, ...Object.fromEntries(Object.keys(patch).map(key => [key, original[key]])) });
                 await apiFetch(path, 'PATCH', patch);
             }
-            if (!primary) {
+            for (const route of endpointRoutes) {
+                if (route.gateway !== name) await changeRoute(route, { gateway: name });
+            }
+            if (primary) {
+                if (primary.gateway !== name || primary.comment !== upstreamRouteTag) {
+                    await changeRoute(primary, { gateway: name, comment: upstreamRouteTag });
+                }
+                for (const route of defaults.filter(route => route !== primary)) {
+                    await changeRoute(route, { disabled: 'yes' });
+                }
+            } else {
                 await apiFetch(uplinkRoutePath, 'PUT', {
                     'dst-address': '0.0.0.0/0', 'routing-table': 'mv2tr', gateway: name, comment: upstreamRouteTag
                 });
@@ -7492,10 +7502,10 @@
         }))).flat();
     }
 
-    async function ensureUplinkNameIsUnusedByClients(name) {
+    async function ensureUplinkNameIsUnusedByClients(name, { allowUnusedTable = false } = {}) {
         const [lists, tables] = await Promise.all([
             apiList('/ip/firewall/address-list?.proplist=list'),
-            apiList('/routing/table?.proplist=name')
+            allowUnusedTable ? [] : apiList('/routing/table?.proplist=name')
         ]);
         if (lists.some(row => row.list === name) || tables.some(row => row.name === name)) {
             throw new Error('اینترفیس در سیاست مسیریابی کلاینت‌ها استفاده می‌شود. ابتدا وابستگی کلاینت‌ها را بردارید.');
@@ -7602,13 +7612,20 @@
         const iface = interfaces.find(row => row['.id'] === target['.id'] && row.name === target.name);
         if (!iface) throw new Error('اینترفیس تغییر کرده است. فهرست را دوباره باز کنید.');
         const dependentRoutes = routes.filter(route => !isTrue(route.dynamic) && route.gateway === iface.name);
-        if (dependentRoutes.some(route => isMullvadDefaultRoute(route) || isDirectMullvadEndpointRoute(route))
+        const activeMullvadRoute = dependentRoutes.some(route => !isTrue(route.disabled)
+            && (isMullvadDefaultRoute(route) || isDirectMullvadEndpointRoute(route)));
+        if (activeMullvadRoute
             || (getMullvadUpstream(interfaces, routes) === iface.name && peers.some(peer => /^mv-wg-/.test(peer.interface)))) {
-            throw new Error('ابتدا مسیر پیش‌فرض مولواد را به اینترفیس دیگری منتقل کنید.');
+            throw new Error('ابتدا مسیر پیش‌فرض مولواد را از روی کارت اینترفیس دیگری انتخاب کنید.');
         }
-        if (dependentRoutes.length) throw new Error('این اینترفیس در مسیرهای روتر استفاده می‌شود. ابتدا مسیرهای وابسته را تغییر دهید.');
-        await ensureUplinkNameIsUnusedByClients(iface.name);
+        await ensureUplinkNameIsUnusedByClients(iface.name, { allowUnusedTable: true });
+        const routeDetails = dependentRoutes.slice(0, 8).map(route => route['dst-address'] + ' · ' + route['routing-table']);
+        if (dependentRoutes.length > routeDetails.length) routeDetails.push('…');
+        const message = 'اینترفیس ' + iface.name + ' حذف شود؟'
+            + (routeDetails.length ? '\n\nمسیرهای وابسته نیز حذف می‌شوند:\n' + routeDetails.join('\n') : '');
+        if (!window.confirm(message)) return false;
         await deleteById(wireguardPath, iface['.id']);
+        for (const route of dependentRoutes) await deleteById(uplinkRoutePath, route['.id']);
         peerTests.delete(iface.name);
         peerTrafficTests.delete(iface.name);
         for (const peer of peers.filter(row => row.interface === iface.name)) await deleteById(wireguardPeersPath, peer['.id']);

@@ -90,8 +90,8 @@
         .account-menu { position: relative; }
         .account-menu summary { cursor: pointer; padding: 6px; }
         .account-actions { position: absolute; z-index: 30; inset-inline-end: 0; top: 100%; display: grid; gap: 6px; min-width: 110px; padding: 8px; background: #152033; border: 1px solid var(--border); border-radius: 8px; }
-        #interfaceEditor, #peerResetDialog { width: min(420px, calc(100% - 32px)); background: #152033; color: inherit; border: 1px solid var(--border); border-radius: 12px; padding: 18px; }
-        #interfaceEditor::backdrop, #peerResetDialog::backdrop { background: #080d17b3; }
+        #interfaceRemoveDialog, #interfaceEditor, #peerResetDialog { width: min(420px, calc(100% - 32px)); background: #152033; color: inherit; border: 1px solid var(--border); border-radius: 12px; padding: 18px; }
+        #interfaceRemoveDialog::backdrop, #interfaceEditor::backdrop, #peerResetDialog::backdrop { background: #080d17b3; }
         #peerResetForm { display: grid; gap: 10px; }
         .status-strip {
             background: var(--card);
@@ -241,7 +241,19 @@
         tbody tr.is-self:hover { background: rgba(16, 185, 129, 0.16); }
         tbody tr.is-offline { background: rgba(239, 68, 68, 0.13); border-inline-start: 3px solid var(--red); }
         tbody tr.is-offline:hover { background: rgba(239, 68, 68, 0.2); }
-        .section-loading { opacity: 0.72; transition: opacity 0.18s ease; }
+        .section-skeleton { padding: 14px; }
+        .tab-panel[aria-busy="true"] > :not(.section-skeleton) { display: none; }
+        .skeleton-block {
+            background: linear-gradient(100deg, #263348 25%, #34455d 50%, #263348 75%) 0 0 / 260% 100%;
+            border-radius: 8px; animation: skeleton-shimmer 1.6s ease-in-out infinite;
+        }
+        .skeleton-heading { height: 24px; width: min(220px, 65%); margin: 0 0 16px; }
+        .skeleton-card .skeleton-block:nth-child(1) { width: 64%; height: 20px; }
+        .skeleton-card .skeleton-block:nth-child(2) { width: 84%; height: 14px; }
+        .skeleton-card .skeleton-block:nth-child(3) { height: 46px; }
+        .skeleton-card .skeleton-block:nth-child(4) { width: 54%; height: 24px; margin-top: auto; }
+        @keyframes skeleton-shimmer { to { background-position: 100% 0; } }
+        @media (prefers-reduced-motion: reduce) { .skeleton-block { animation: none; } }
         .ip { font-variant-numeric: tabular-nums; font-weight: 700; }
         .muted { color: var(--muted); font-size: 11px; }
         .badge {
@@ -1265,6 +1277,21 @@
     </div>
 </div>
 
+<dialog id="interfaceRemoveDialog" aria-labelledby="interfaceRemoveTitle">
+    <form method="dialog">
+        <h2 id="interfaceRemoveTitle">حذف اینترفیس</h2>
+        <p id="interfaceRemoveName"></p>
+        <div id="interfaceRemoveRoutes" hidden>
+            <p>این مسیرهای وابسته هم حذف می‌شوند.</p>
+            <ul></ul>
+        </div>
+        <footer class="relay-actions">
+            <button type="submit" value="cancel" autofocus>انصراف</button>
+            <button type="submit" value="remove" class="danger">حذف اینترفیس</button>
+        </footer>
+    </form>
+</dialog>
+
 <dialog id="interfaceEditor" aria-labelledby="interfaceEditorTitle">
     <form id="interfaceEditForm">
         <header><h2 id="interfaceEditorTitle">ویرایش اینترفیس</h2></header>
@@ -1644,6 +1671,13 @@
         interfaceCards.replaceChildren();
         interfacePingAllBtn.disabled = true;
         if (interfaceEditor.open) interfaceEditor.close();
+        if (interfaceRemoveDialog.open) interfaceRemoveDialog.close('cancel');
+        for (const id of ['tabClients', 'tabWireguard', 'tabInterfaces', 'tabChr', 'tabCredentials']) {
+            loadedPanels.delete(id);
+            loadingPanels.delete(id);
+            document.getElementById(id).removeAttribute('aria-busy');
+            document.querySelector('#' + id + ' .section-skeleton')?.remove();
+        }
         mullvadUpstream = 'exit';
         upstreamInterfaces.clear();
         isLive = false;
@@ -3067,18 +3101,18 @@
     function showTab(name) {
         document.getElementById('tabClients').hidden = name !== 'clients';
         document.getElementById('tabInterfaces').hidden = name !== 'interfaces';
-        if (name === 'interfaces') void loadInterfacePanel();
+        if (name === 'interfaces') void loadPanel('tabInterfaces', loadInterfacePanel);
         document.getElementById('tabWireguard').hidden = name !== 'wireguard';
         document.getElementById('tabCredentials').hidden = name !== 'credentials';
         document.getElementById('tabChr').hidden = name !== 'chr';
-        if (name === 'chr') void runChrDhcpAction();
+        if (name === 'chr') void loadPanel('tabChr', () => runChrDhcpAction());
         document.querySelectorAll('#mainTabs .tab').forEach((button) => {
             const selected = button.dataset.tab === name;
             button.classList.toggle('active', selected);
             button.setAttribute('aria-selected', selected ? 'true' : 'false');
         });
-        if (name === 'wireguard') loadRelayPanel();
-        if (name === 'credentials') void loadCredentialsPanel();
+        if (name === 'wireguard') void loadPanel('tabWireguard', loadRelayPanel);
+        if (name === 'credentials') void loadPanel('tabCredentials', loadCredentialsPanel);
     }
 
     let chrDnsFieldSerial = 0;
@@ -4502,9 +4536,34 @@
         return speeds;
     }
 
-    function setSectionLoading(selector, isLoading) {
-        const el = document.querySelector(selector);
-        if (el) el.classList.toggle('section-loading', Boolean(isLoading));
+    const loadedPanels = new Set();
+    const loadingPanels = new Map();
+
+    function loadPanel(id, action) {
+        if (loadedPanels.has(id)) return action();
+        if (loadingPanels.has(id)) return loadingPanels.get(id);
+        const panel = document.getElementById(id);
+        const skeleton = document.createElement('div');
+        skeleton.className = 'section-skeleton';
+        skeleton.innerHTML = '<div class="skeleton-heading skeleton-block"></div><div class="client-cards"></div>';
+        skeleton.setAttribute('role', 'status');
+        skeleton.setAttribute('aria-label', 'در حال بارگذاری');
+        skeleton.querySelector('.client-cards').innerHTML = '<div class="client-card skeleton-card">'
+            .concat('<div class="skeleton-block"></div>'.repeat(4), '</div>').repeat(4);
+        panel.append(skeleton);
+        panel.setAttribute('aria-busy', 'true');
+        const pending = Promise.resolve().then(action).then(result => {
+            if (result !== false && skeleton.isConnected) loadedPanels.add(id);
+            return result;
+        }).finally(() => {
+            if (skeleton.isConnected) {
+                panel.removeAttribute('aria-busy');
+                skeleton.remove();
+            }
+            if (loadingPanels.get(id) === pending) loadingPanels.delete(id);
+        });
+        loadingPanels.set(id, pending);
+        return pending;
     }
 
     function updateSummaryStatus() {
@@ -4526,139 +4585,136 @@
         }
     }
 
-    async function loadWireguardSection(now = Date.now(), showLoading = false) {
-        if (showLoading) setSectionLoading('#tabWireguard .card', true);
-        try {
-            const [wgList, allIfaces, wgPeers, mangleRules, addrLists] = await Promise.all([
-                apiList('/interface/wireguard?.proplist=.id,name,comment,disabled,running'),
-                apiList('/interface?.proplist=name,comment,rx-byte,tx-byte,running,disabled'),
-                apiList('/interface/wireguard/peers?.proplist=.id,interface,public-key,endpoint-address,endpoint-port,current-endpoint-address,current-endpoint-port,last-handshake,rx,tx,disabled'),
-                apiList('/ip/firewall/mangle?.proplist=.id,new-routing-mark,routing-mark,bytes,comment,src-address-list'),
-                apiList('/ip/firewall/address-list?.proplist=.id,list,address,comment,disabled')
-            ]);
+    async function loadWireguardSection(now = Date.now()) {
+        const router = getBaseUrl();
+        const [wgList, allIfaces, wgPeers, mangleRules, addrLists] = await Promise.all([
+            apiList('/interface/wireguard?.proplist=.id,name,comment,disabled,running'),
+            apiList('/interface?.proplist=name,comment,rx-byte,tx-byte,running,disabled'),
+            apiList('/interface/wireguard/peers?.proplist=.id,interface,public-key,endpoint-address,endpoint-port,current-endpoint-address,current-endpoint-port,last-handshake,rx,tx,disabled'),
+            apiList('/ip/firewall/mangle?.proplist=.id,new-routing-mark,routing-mark,bytes,comment,src-address-list'),
+            apiList('/ip/firewall/address-list?.proplist=.id,list,address,comment,disabled')
+        ]);
 
-            upstreamInterfaces = new Set(wgList.filter(item => item.comment === upstreamInterfaceTag
-                || item.name === mullvadUpstream).map(item => item.name));
-            addressLists = addrLists.filter((row) => row.list && isClientAddressList(row.list) && !isTrue(row.disabled));
+        if (!monitoring || getBaseUrl() !== router) return false;
+        upstreamInterfaces = new Set(wgList.filter(item => item.comment === upstreamInterfaceTag
+            || item.name === mullvadUpstream).map(item => item.name));
+        addressLists = addrLists.filter((row) => row.list && isClientAddressList(row.list) && !isTrue(row.disabled));
 
-            const ifaceByName = new Map();
-            allIfaces.forEach((iface) => { if (iface.name) ifaceByName.set(iface.name, iface); });
-            const peersByIface = new Map();
-            wgPeers.forEach((peer) => {
-                if (!peer.interface) return;
-                if (!peersByIface.has(peer.interface)) peersByIface.set(peer.interface, []);
-                peersByIface.get(peer.interface).push(peer);
-            });
+        const ifaceByName = new Map();
+        allIfaces.forEach((iface) => { if (iface.name) ifaceByName.set(iface.name, iface); });
+        const peersByIface = new Map();
+        wgPeers.forEach((peer) => {
+            if (!peer.interface) return;
+            if (!peersByIface.has(peer.interface)) peersByIface.set(peer.interface, []);
+            peersByIface.get(peer.interface).push(peer);
+        });
 
-            wgInterfaces = wgList
-                .filter((item) => item.name && (String(item.name).startsWith('mv-wg-') || isExitIfaceName(item.name)))
-                .map((item) => {
-                    const iface = ifaceByName.get(item.name) || {};
-                    const peers = peersByIface.get(item.name) || [];
-                    const health = handshakeInfo(peers);
-                    return {
-                        name: item.name,
-                        comment: String(iface.comment || item.comment || '').trim(),
-                        disabled: isTrue(item.disabled) || isTrue(iface.disabled),
-                        endpoint: health.endpoint,
-                        handshake: health.text,
-                        handshakeOk: health.ok
-                    };
-                })
-                .sort(comparePeersByPing);
-
-            const dt = prevTimestamp ? (now - prevTimestamp) / 1000 : 0;
-            const usableDt = dt > 0 && dt <= SPEED_GAP_MAX;
-            const ifaceStats = new Map();
-            const nextIface = new Map();
-            const wgNames = new Set(wgList.map((item) => item.name).filter(Boolean));
-            allIfaces.forEach((iface) => {
-                if (!iface.name || !wgNames.has(iface.name)) return;
-                const rx = Number(iface['rx-byte']) || 0;
-                const tx = Number(iface['tx-byte']) || 0;
-                const prev = prevIfaceStats.get(iface.name);
-                let rxSpeed = 0;
-                let txSpeed = 0;
-                if (usableDt && prev) {
-                    rxSpeed = Math.max(0, (rx - prev.rx) / dt);
-                    txSpeed = Math.max(0, (tx - prev.tx) / dt);
-                }
-                nextIface.set(iface.name, { rx, tx });
-                ifaceStats.set(iface.name, {
-                    rx,
-                    tx,
-                    rxSpeed,
-                    txSpeed,
-                    running: isTrue(iface.running)
-                });
-            });
-            prevIfaceStats = nextIface;
-            prevTimestamp = now;
-
-            const mangleBytes = new Map();
-            let upstreamMangleBytes = 0;
-            mangleRules.forEach((rule) => {
-                const mark = markOf(rule);
-                if (mark === 'mv2tr') upstreamMangleBytes += Number(rule.bytes) || 0;
-                const list = rule['src-address-list'] || '';
-                const key = isClientRouteTarget(mark) ? mark
-                    : (isClientAddressList(list) ? list : '');
-                if (!key || mangleBytes.has(rule['.id'])) return;
-                // Exit iface traffic for Mullvad handshakes stays on mv2tr; client-via-exit uses mark=exit.
-                if (isExitIfaceName(key) && mark === 'mv2tr') return;
-                mangleBytes.set(rule['.id'], { key, bytes: Number(rule.bytes) || 0 });
-            });
-            const mangleByPeer = new Map();
-            mangleBytes.forEach((row) => {
-                mangleByPeer.set(row.key, (mangleByPeer.get(row.key) || 0) + row.bytes);
-            });
-
-            wgCatalog = wgList
-                .filter((item) => item.name)
-                .map((item) => {
-                    const iface = ifaceByName.get(item.name) || {};
-                    const peers = peersByIface.get(item.name) || [];
-                    const stats = ifaceStats.get(item.name) || { rx: 0, tx: 0, rxSpeed: 0, txSpeed: 0, running: isTrue(item.running) };
-                    const disabled = isTrue(item.disabled) || isTrue(iface.disabled);
-                    let health = handshakeInfo(peers);
-                    if (disabled) health = { ok: false, text: 'غیرفعال', endpoint: health.endpoint, rx: health.rx };
-                    else if (stats.running === false) health = { ok: false, text: 'اینترفیس خاموش', endpoint: health.endpoint, rx: health.rx };
-                    const comment = String(iface.comment || item.comment || '').trim();
-                    return {
-                        name: item.name,
-                        comment: comment
-                            ? describePeer(item.name, comment)
-                            : (isExitIfaceName(item.name)
-                                ? ('تونل خروجی · ' + item.name)
-                                : (String(item.name).startsWith('mv-wg-') ? describePeer(item.name, '') : 'اینترفیس WireGuard')),
-                        disabled,
-                        health,
-                        stats,
-                        mangleBytes: isExitIfaceName(item.name)
-                            ? (mangleByPeer.get(item.name) || 0) + upstreamMangleBytes
-                            : (mangleByPeer.get(item.name) || 0),
-                        clients: clientsForPeer(item.name)
-                    };
-                });
-            wgCatalog.sort((a, b) => {
-                const rank = (model) => {
-                    if (model.disabled) return 2;
-                    if (model.clients.length || model.stats.rxSpeed > 0 || model.stats.txSpeed > 0 || model.health.ok) return 0;
-                    return 1;
+        wgInterfaces = wgList
+            .filter((item) => item.name && (String(item.name).startsWith('mv-wg-') || isExitIfaceName(item.name)))
+            .map((item) => {
+                const iface = ifaceByName.get(item.name) || {};
+                const peers = peersByIface.get(item.name) || [];
+                const health = handshakeInfo(peers);
+                return {
+                    name: item.name,
+                    comment: String(iface.comment || item.comment || '').trim(),
+                    disabled: isTrue(item.disabled) || isTrue(iface.disabled),
+                    endpoint: health.endpoint,
+                    handshake: health.text,
+                    handshakeOk: health.ok
                 };
-                return rank(a) - rank(b) || a.name.localeCompare(b.name, 'en');
-            });
-            document.getElementById('wgTabCount').textContent = String(wgCatalog.filter(isListedWireGuardPeer).length);
-            if (monitoring && !relayBusy && syncInstalledRelays(wgList, wgPeers)
-                && !document.getElementById('tabWireguard').hidden) {
-                renderRelayManagement();
-            } else {
-                updateRelayCardStats();
+            })
+            .sort(comparePeersByPing);
+
+        const dt = prevTimestamp ? (now - prevTimestamp) / 1000 : 0;
+        const usableDt = dt > 0 && dt <= SPEED_GAP_MAX;
+        const ifaceStats = new Map();
+        const nextIface = new Map();
+        const wgNames = new Set(wgList.map((item) => item.name).filter(Boolean));
+        allIfaces.forEach((iface) => {
+            if (!iface.name || !wgNames.has(iface.name)) return;
+            const rx = Number(iface['rx-byte']) || 0;
+            const tx = Number(iface['tx-byte']) || 0;
+            const prev = prevIfaceStats.get(iface.name);
+            let rxSpeed = 0;
+            let txSpeed = 0;
+            if (usableDt && prev) {
+                rxSpeed = Math.max(0, (rx - prev.rx) / dt);
+                txSpeed = Math.max(0, (tx - prev.tx) / dt);
             }
-            updateSummaryStatus();
-        } finally {
-            if (showLoading) setSectionLoading('#tabWireguard .card', false);
+            nextIface.set(iface.name, { rx, tx });
+            ifaceStats.set(iface.name, {
+                rx,
+                tx,
+                rxSpeed,
+                txSpeed,
+                running: isTrue(iface.running)
+            });
+        });
+        prevIfaceStats = nextIface;
+        prevTimestamp = now;
+
+        const mangleBytes = new Map();
+        let upstreamMangleBytes = 0;
+        mangleRules.forEach((rule) => {
+            const mark = markOf(rule);
+            if (mark === 'mv2tr') upstreamMangleBytes += Number(rule.bytes) || 0;
+            const list = rule['src-address-list'] || '';
+            const key = isClientRouteTarget(mark) ? mark
+                : (isClientAddressList(list) ? list : '');
+            if (!key || mangleBytes.has(rule['.id'])) return;
+            // Exit iface traffic for Mullvad handshakes stays on mv2tr; client-via-exit uses mark=exit.
+            if (isExitIfaceName(key) && mark === 'mv2tr') return;
+            mangleBytes.set(rule['.id'], { key, bytes: Number(rule.bytes) || 0 });
+        });
+        const mangleByPeer = new Map();
+        mangleBytes.forEach((row) => {
+            mangleByPeer.set(row.key, (mangleByPeer.get(row.key) || 0) + row.bytes);
+        });
+
+        wgCatalog = wgList
+            .filter((item) => item.name)
+            .map((item) => {
+                const iface = ifaceByName.get(item.name) || {};
+                const peers = peersByIface.get(item.name) || [];
+                const stats = ifaceStats.get(item.name) || { rx: 0, tx: 0, rxSpeed: 0, txSpeed: 0, running: isTrue(item.running) };
+                const disabled = isTrue(item.disabled) || isTrue(iface.disabled);
+                let health = handshakeInfo(peers);
+                if (disabled) health = { ok: false, text: 'غیرفعال', endpoint: health.endpoint, rx: health.rx };
+                else if (stats.running === false) health = { ok: false, text: 'اینترفیس خاموش', endpoint: health.endpoint, rx: health.rx };
+                const comment = String(iface.comment || item.comment || '').trim();
+                return {
+                    name: item.name,
+                    comment: comment
+                        ? describePeer(item.name, comment)
+                        : (isExitIfaceName(item.name)
+                            ? ('تونل خروجی · ' + item.name)
+                            : (String(item.name).startsWith('mv-wg-') ? describePeer(item.name, '') : 'اینترفیس WireGuard')),
+                    disabled,
+                    health,
+                    stats,
+                    mangleBytes: isExitIfaceName(item.name)
+                        ? (mangleByPeer.get(item.name) || 0) + upstreamMangleBytes
+                        : (mangleByPeer.get(item.name) || 0),
+                    clients: clientsForPeer(item.name)
+                };
+            });
+        wgCatalog.sort((a, b) => {
+            const rank = (model) => {
+                if (model.disabled) return 2;
+                if (model.clients.length || model.stats.rxSpeed > 0 || model.stats.txSpeed > 0 || model.health.ok) return 0;
+                return 1;
+            };
+            return rank(a) - rank(b) || a.name.localeCompare(b.name, 'en');
+        });
+        document.getElementById('wgTabCount').textContent = String(wgCatalog.filter(isListedWireGuardPeer).length);
+        if (monitoring && !relayBusy && syncInstalledRelays(wgList, wgPeers)
+            && !document.getElementById('tabWireguard').hidden) {
+            renderRelayManagement();
+        } else {
+            updateRelayCardStats();
         }
+        updateSummaryStatus();
     }
 
     async function readClientDhcpLeases() {
@@ -4679,128 +4735,127 @@
         });
     }
 
-    async function loadClientsSection(now = Date.now(), showLoading = false) {
-        if (showLoading) setSectionLoading('#tabClients .card', true);
-        try {
-            const [leases, connections, arpRows, routerAddrs] = await Promise.all([
-                readClientDhcpLeases(),
-                apiList('/ip/firewall/connection?.proplist=.id,src-address,dst-address,orig-bytes,repl-bytes'),
-                apiList('/ip/arp?.proplist=address,mac-address,interface,status,comment').catch(() => []),
-                apiList('/ip/address?.proplist=address,interface,disabled,comment').catch(() => [])
-            ]);
+    async function loadClientsSection(now = Date.now(), routeData) {
+        const router = getBaseUrl();
+        const [leases, connections, arpRows, routerAddrs, routesReady] = await Promise.all([
+            readClientDhcpLeases(),
+            apiList('/ip/firewall/connection?.proplist=.id,src-address,dst-address,orig-bytes,repl-bytes'),
+            apiList('/ip/arp?.proplist=address,mac-address,interface,status,comment').catch(() => []),
+            apiList('/ip/address?.proplist=address,interface,disabled,comment').catch(() => []),
+            routeData
+        ]);
 
-            dhcpLeases = leases;
+        if (!monitoring || getBaseUrl() !== router || routesReady === false) return false;
+        dhcpLeases = leases;
 
-            const clientTotals = accumulateClients(connections);
-            latestClientSpeeds = speedsFromDelta(clientTotals, now);
+        const clientTotals = accumulateClients(connections);
+        latestClientSpeeds = speedsFromDelta(clientTotals, now);
 
-            const routerIps = new Set(routerAddrs.filter(row => !isTrue(row.disabled)).map(row => ipOnly(row.address)).filter(isIpv4));
-            const sessionPorts = dashboardPorts();
-            const sessionIps = new Set();
-            connections.forEach((row) => {
-                const dst = endpointParts(row['dst-address']);
-                const src = ipOnly(row['src-address']);
-                if (!sessionPorts.has(dst.port) || !routerIps.has(dst.ip)) return;
-                if (isPrivateLan(src) && !routerIps.has(src)) sessionIps.add(src);
+        const routerIps = new Set(routerAddrs.filter(row => !isTrue(row.disabled)).map(row => ipOnly(row.address)).filter(isIpv4));
+        const sessionPorts = dashboardPorts();
+        const sessionIps = new Set();
+        connections.forEach((row) => {
+            const dst = endpointParts(row['dst-address']);
+            const src = ipOnly(row['src-address']);
+            if (!sessionPorts.has(dst.port) || !routerIps.has(dst.ip)) return;
+            if (isPrivateLan(src) && !routerIps.has(src)) sessionIps.add(src);
+        });
+        const leaseByIp = new Map();
+        dhcpLeases.forEach((lease) => {
+            const ip = ipOnly(lease.address);
+            if (!isIpv4(ip) || routerIps.has(ip)) return;
+            const previous = leaseByIp.get(ip);
+            if (previous && previous.dynamic && !isTrue(lease.dynamic)) return;
+            leaseByIp.set(ip, lease);
+        });
+        const arpByIp = new Map();
+        arpRows.forEach((row) => {
+            const ip = ipOnly(row.address);
+            const iface = String(row.interface || '');
+            if (!isPrivateLan(ip) || routerIps.has(ip)) return;
+            if (/^(mv-wg-|lo)/i.test(iface) || isExitIfaceName(iface)) return;
+            if (row.status === 'incomplete' || row.status === 'failed') return;
+            arpByIp.set(ip, row);
+        });
+
+        // Connected devices = private LAN IPs that currently have firewall connections.
+        const lanClients = new Map();
+        for (const [ip, totals] of clientTotals) {
+            if (!totals?.count || !isPrivateLan(ip) || routerIps.has(ip)) continue;
+            const lease = leaseByIp.get(ip);
+            const arp = arpByIp.get(ip);
+            const iface = String(arp?.interface || '');
+            const mac = lease?.['mac-address'] || arp?.['mac-address'] || '';
+            lanClients.set(ip, {
+                ip,
+                host: cleanHost(lease?.['host-name'] || lease?.comment || arp?.comment || ''),
+                mac,
+                leaseId: lease?.['.id'] || '',
+                dynamic: lease ? isTrue(lease.dynamic) : false,
+                source: lease ? 'dhcp' : (arp ? 'arp' : 'conn'),
+                leaseBound: lease?.status === 'bound',
+                arpReachable: Boolean(arp && arp.status === 'reachable' && arp['mac-address']),
+                iface,
+                connected: true
             });
-            const leaseByIp = new Map();
-            dhcpLeases.forEach((lease) => {
-                const ip = ipOnly(lease.address);
-                if (!isIpv4(ip) || routerIps.has(ip)) return;
-                const previous = leaseByIp.get(ip);
-                if (previous && previous.dynamic && !isTrue(lease.dynamic)) return;
-                leaseByIp.set(ip, lease);
-            });
-            const arpByIp = new Map();
-            arpRows.forEach((row) => {
-                const ip = ipOnly(row.address);
-                const iface = String(row.interface || '');
-                if (!isPrivateLan(ip) || routerIps.has(ip)) return;
-                if (/^(mv-wg-|lo)/i.test(iface) || isExitIfaceName(iface)) return;
-                if (row.status === 'incomplete' || row.status === 'failed') return;
-                arpByIp.set(ip, row);
-            });
-
-            // Connected devices = private LAN IPs that currently have firewall connections.
-            const lanClients = new Map();
-            for (const [ip, totals] of clientTotals) {
-                if (!totals?.count || !isPrivateLan(ip) || routerIps.has(ip)) continue;
-                const lease = leaseByIp.get(ip);
-                const arp = arpByIp.get(ip);
-                const iface = String(arp?.interface || '');
-                const mac = lease?.['mac-address'] || arp?.['mac-address'] || '';
-                lanClients.set(ip, {
-                    ip,
-                    host: cleanHost(lease?.['host-name'] || lease?.comment || arp?.comment || ''),
-                    mac,
-                    leaseId: lease?.['.id'] || '',
-                    dynamic: lease ? isTrue(lease.dynamic) : false,
-                    source: lease ? 'dhcp' : (arp ? 'arp' : 'conn'),
-                    leaseBound: lease?.status === 'bound',
-                    arpReachable: Boolean(arp && arp.status === 'reachable' && arp['mac-address']),
-                    iface,
-                    connected: true
-                });
-            }
-
-            // Keep VPN-assigned clients in the dataset; showOffline controls visibility.
-            addressLists.forEach((row) => {
-                const ip = ipOnly(row.address);
-                if (!isIpv4(ip) || lanClients.has(ip) || routerIps.has(ip) || !isPrivateLan(ip)) return;
-                const lease = leaseByIp.get(ip);
-                const arp = arpByIp.get(ip);
-                lanClients.set(ip, {
-                    ip,
-                    host: cleanHost(lease?.['host-name'] || lease?.comment || row.comment || arp?.comment || ''),
-                    mac: lease?.['mac-address'] || arp?.['mac-address'] || '',
-                    leaseId: lease?.['.id'] || '',
-                    dynamic: lease ? isTrue(lease.dynamic) : false,
-                    source: lease ? 'dhcp' : (arp ? 'arp' : 'list'),
-                    leaseBound: lease?.status === 'bound',
-                    arpReachable: Boolean(arp && arp.status === 'reachable' && arp['mac-address']),
-                    iface: String(arp?.interface || ''),
-                    connected: false
-                });
-            });
-
-            const clientRows = Array.from(lanClients.values());
-            clientRows.forEach((row) => {
-                row.here = sessionIps.has(row.ip);
-                const hasConnections = Boolean(clientTotals.get(row.ip)?.count);
-                row.connected = hasConnections;
-                row.offline = !hasConnections;
-
-                if (!row.host) {
-                    if (row.here) row.host = 'همین کامپیوتر';
-                    else if (row.source === 'arp') row.host = 'دستگاه سیمی';
-                    else row.host = 'دستگاه ناشناس';
-                }
-                const place = row.iface ? (' · ' + row.iface) : '';
-                const connTag = hasConnections
-                    ? (' · ' + (clientTotals.get(row.ip)?.count || 0) + ' کانکشن')
-                    : ' · بدون کانکشن';
-                if (row.here) row.kind = ' · همین دستگاه' + place + connTag;
-                else if (row.source === 'arp') row.kind = ' · سیمی' + place + connTag;
-                else if (row.source === 'dhcp') row.kind = ' · DHCP' + place + connTag;
-                else row.kind = ' · شبکه' + place + connTag;
-            });
-            clientRows.sort((a, b) => Number(b.here) - Number(a.here)
-                || Number(b.connected) - Number(a.connected)
-                || (clientTotals.get(b.ip)?.count || 0) - (clientTotals.get(a.ip)?.count || 0)
-                || a.host.localeCompare(b.host, 'fa'));
-            latestClientRows = clientRows;
-            renderClientCards();
-            updateSummaryStatus();
-        } finally {
-            if (showLoading) setSectionLoading('#tabClients .card', false);
         }
+
+        // Keep VPN-assigned clients in the dataset; showOffline controls visibility.
+        addressLists.forEach((row) => {
+            const ip = ipOnly(row.address);
+            if (!isIpv4(ip) || lanClients.has(ip) || routerIps.has(ip) || !isPrivateLan(ip)) return;
+            const lease = leaseByIp.get(ip);
+            const arp = arpByIp.get(ip);
+            lanClients.set(ip, {
+                ip,
+                host: cleanHost(lease?.['host-name'] || lease?.comment || row.comment || arp?.comment || ''),
+                mac: lease?.['mac-address'] || arp?.['mac-address'] || '',
+                leaseId: lease?.['.id'] || '',
+                dynamic: lease ? isTrue(lease.dynamic) : false,
+                source: lease ? 'dhcp' : (arp ? 'arp' : 'list'),
+                leaseBound: lease?.status === 'bound',
+                arpReachable: Boolean(arp && arp.status === 'reachable' && arp['mac-address']),
+                iface: String(arp?.interface || ''),
+                connected: false
+            });
+        });
+
+        const clientRows = Array.from(lanClients.values());
+        clientRows.forEach((row) => {
+            row.here = sessionIps.has(row.ip);
+            const hasConnections = Boolean(clientTotals.get(row.ip)?.count);
+            row.connected = hasConnections;
+            row.offline = !hasConnections;
+
+            if (!row.host) {
+                if (row.here) row.host = 'همین کامپیوتر';
+                else if (row.source === 'arp') row.host = 'دستگاه سیمی';
+                else row.host = 'دستگاه ناشناس';
+            }
+            const place = row.iface ? (' · ' + row.iface) : '';
+            const connTag = hasConnections
+                ? (' · ' + (clientTotals.get(row.ip)?.count || 0) + ' کانکشن')
+                : ' · بدون کانکشن';
+            if (row.here) row.kind = ' · همین دستگاه' + place + connTag;
+            else if (row.source === 'arp') row.kind = ' · سیمی' + place + connTag;
+            else if (row.source === 'dhcp') row.kind = ' · DHCP' + place + connTag;
+            else row.kind = ' · شبکه' + place + connTag;
+        });
+        clientRows.sort((a, b) => Number(b.here) - Number(a.here)
+            || Number(b.connected) - Number(a.connected)
+            || (clientTotals.get(b.ip)?.count || 0) - (clientTotals.get(a.ip)?.count || 0)
+            || a.host.localeCompare(b.host, 'fa'));
+        latestClientRows = clientRows;
+        renderClientCards();
+        updateSummaryStatus();
     }
 
     async function refreshAll() {
         const now = Date.now();
+        const wireguard = loadWireguardSection(now);
         const results = await Promise.allSettled([
-            loadWireguardSection(now),
-            loadClientsSection(now)
+            wireguard,
+            loadPanel('tabClients', () => loadClientsSection(now, wireguard))
         ]);
         const rejected = results.find((r) => r.status === 'rejected');
         if (rejected) throw rejected.reason;
@@ -4849,9 +4904,14 @@
             setBusy(false);
 
             const now = Date.now();
-            await loadInterfacePanel();
-            void loadClientsSection(now, true).catch((err) => setPollStatus('خطا در بخش کلاینت‌ها: ' + err.message));
-            void loadWireguardSection(now, true).catch((err) => setPollStatus('خطا در بخش WireGuard: ' + err.message));
+            void loadPanel('tabClients', async () => {
+                const uplinks = loadPanel('tabInterfaces', loadInterfacePanel);
+                const wireguard = uplinks.then(() => loadWireguardSection(now));
+                return loadClientsSection(now, wireguard);
+            }).catch(error => setPollStatus('خطا در بارگذاری کلاینت‌ها: ' + error.message))
+                .finally(() => {
+                    if (monitoring && isLive) startLiveTimer();
+                });
             void loadRouterHealthSection();
             if (!document.getElementById('tabWireguard').hidden) {
                 void runRelayAction(loadInstalledRelays);
@@ -4862,7 +4922,6 @@
 
             const clock = document.getElementById('lastUpdateText');
             if (clock) clock.textContent = 'آخرین آپدیت: ' + new Date(now).toLocaleTimeString('fa-IR');
-            startLiveTimer();
         } catch (err) {
             if (!monitoring) {
                 setAuthUi(false);
@@ -6928,11 +6987,12 @@
         }
     }
 
-    function loadRelayPanel() {
+    async function loadRelayPanel() {
         renderRelayManagement();
-        void refreshRelayCatalog(() => localDashboard('relays'),
-            'فهرست رله‌های محلی در دسترس نیست.');
-        if (monitoring && !installedRelays) void runRelayAction(loadInstalledRelays);
+        await Promise.all([
+            refreshRelayCatalog(() => localDashboard('relays'), 'فهرست رله‌های محلی در دسترس نیست.'),
+            monitoring && !installedRelays ? runRelayAction(loadInstalledRelays) : undefined
+        ]);
     }
 
     function resetCredentialForm() {
@@ -7271,12 +7331,12 @@
         if (!monitoring) {
             interfaceCards.replaceChildren();
             uplinkStatus.textContent = 'ابتدا به روتر متصل شوید.';
-            return;
+            return false;
         }
         const router = getBaseUrl();
         try {
             const [interfaces, routes] = await readUplinks();
-            if (!monitoring || getBaseUrl() !== router) return;
+            if (!monitoring || getBaseUrl() !== router) return false;
             mullvadUpstream = getMullvadUpstream(interfaces, routes);
             upstreamInterfaces = new Set(interfaces.filter(iface => iface.comment === upstreamInterfaceTag
                 || iface.name === mullvadUpstream).map(iface => iface.name));
@@ -7285,11 +7345,16 @@
             uplinkStatus.textContent = current ? 'مسیر پیش‌فرض مولواد · ' + current.name : 'مسیر پیش‌فرض مولواد را از روی کارت اینترفیس انتخاب کنید.';
         } catch (error) {
             uplinkStatus.textContent = error.message;
+            return false;
         }
     }
 
     async function runInterfaceAction(action, successMessage) {
-        if (!monitoring || interfaceBusy || relayBusy || interfacePingAllBusy) return;
+        if (!monitoring || interfaceBusy || relayBusy || interfacePingAllBusy) {
+            uplinkStatus.textContent = monitoring ? 'پس از پایان عملیات جاری دوباره تلاش کنید.' : 'ابتدا به روتر متصل شوید.';
+            return;
+        }
+        uplinkStatus.textContent = 'در حال بررسی اطلاعات اینترفیس…';
         interfaceBusy = true;
         relayBusy = true;
         interfaceCards.inert = true;
@@ -7298,7 +7363,11 @@
             if (successMessage && result !== false) {
                 await loadInterfacePanel();
                 uplinkStatus.textContent = successMessage;
-                void loadWireguardSection();
+                void loadWireguardSection().catch(error => setPollStatus(error.message));
+            } else if (result === false) {
+                uplinkStatus.textContent = 'عملیات لغو شد.';
+            } else {
+                uplinkStatus.textContent = '';
             }
         } catch (error) {
             uplinkStatus.textContent = error.message;
@@ -7602,6 +7671,25 @@
         }
     }
 
+    const interfaceRemoveDialog = document.getElementById('interfaceRemoveDialog');
+
+    function confirmInterfaceRemoval(name, routes) {
+        document.getElementById('interfaceRemoveName').textContent = 'اینترفیس ' + name + ' حذف شود؟';
+        const details = document.getElementById('interfaceRemoveRoutes');
+        details.hidden = !routes.length;
+        details.querySelector('ul').replaceChildren(...routes.map(route => {
+            const item = document.createElement('li');
+            item.dir = 'ltr';
+            item.textContent = route;
+            return item;
+        }));
+        interfaceRemoveDialog.returnValue = '';
+        return new Promise(resolve => {
+            interfaceRemoveDialog.showModal();
+            interfaceRemoveDialog.addEventListener('close', () => resolve(interfaceRemoveDialog.returnValue === 'remove'), { once: true });
+        });
+    }
+
     async function removeUplink(target) {
         const [[interfaces, routes], peers, addresses, nats] = await Promise.all([
             readUplinks(),
@@ -7621,9 +7709,8 @@
         await ensureUplinkNameIsUnusedByClients(iface.name, { allowUnusedTable: true });
         const routeDetails = dependentRoutes.slice(0, 8).map(route => route['dst-address'] + ' · ' + route['routing-table']);
         if (dependentRoutes.length > routeDetails.length) routeDetails.push('…');
-        const message = 'اینترفیس ' + iface.name + ' حذف شود؟'
-            + (routeDetails.length ? '\n\nمسیرهای وابسته نیز حذف می‌شوند:\n' + routeDetails.join('\n') : '');
-        if (!window.confirm(message)) return false;
+        if (!await confirmInterfaceRemoval(iface.name, routeDetails) || !monitoring) return false;
+        uplinkStatus.textContent = 'در حال حذف اینترفیس ' + iface.name + '…';
         await deleteById(wireguardPath, iface['.id']);
         for (const route of dependentRoutes) await deleteById(uplinkRoutePath, route['.id']);
         peerTests.delete(iface.name);

@@ -90,8 +90,8 @@
         .account-menu { position: relative; }
         .account-menu summary { cursor: pointer; padding: 6px; }
         .account-actions { position: absolute; z-index: 30; inset-inline-end: 0; top: 100%; display: grid; gap: 6px; min-width: 110px; padding: 8px; background: #152033; border: 1px solid var(--border); border-radius: 8px; }
-        #interfaceRemoveDialog, #interfaceEditor, #peerResetDialog { width: min(420px, calc(100% - 32px)); background: #152033; color: inherit; border: 1px solid var(--border); border-radius: 12px; padding: 18px; }
-        #interfaceRemoveDialog::backdrop, #interfaceEditor::backdrop, #peerResetDialog::backdrop { background: #080d17b3; }
+        #panelConfirmDialog, #interfaceEditor, #peerResetDialog { width: min(420px, calc(100% - 32px)); background: #152033; color: inherit; border: 1px solid var(--border); border-radius: 12px; padding: 18px; }
+        #panelConfirmDialog::backdrop, #interfaceEditor::backdrop, #peerResetDialog::backdrop { background: #080d17b3; }
         #peerResetForm { display: grid; gap: 10px; }
         .status-strip {
             background: var(--card);
@@ -1277,17 +1277,17 @@
     </div>
 </div>
 
-<dialog id="interfaceRemoveDialog" aria-labelledby="interfaceRemoveTitle">
+<dialog id="panelConfirmDialog" aria-labelledby="panelConfirmTitle" aria-describedby="panelConfirmMessage">
     <form method="dialog">
-        <h2 id="interfaceRemoveTitle">حذف اینترفیس</h2>
-        <p id="interfaceRemoveName"></p>
-        <div id="interfaceRemoveRoutes" hidden>
-            <p>این مسیرهای وابسته هم حذف می‌شوند.</p>
+        <h2 id="panelConfirmTitle"></h2>
+        <p id="panelConfirmMessage"></p>
+        <div id="panelConfirmDetails" hidden>
+            <p></p>
             <ul></ul>
         </div>
         <footer class="relay-actions">
-            <button type="submit" value="cancel" autofocus>انصراف</button>
-            <button type="submit" value="remove" class="danger">حذف اینترفیس</button>
+            <button type="submit" value="cancel" autofocus></button>
+            <button type="submit" value="accept"></button>
         </footer>
     </form>
 </dialog>
@@ -1671,7 +1671,7 @@
         interfaceCards.replaceChildren();
         interfacePingAllBtn.disabled = true;
         if (interfaceEditor.open) interfaceEditor.close();
-        if (interfaceRemoveDialog.open) interfaceRemoveDialog.close('cancel');
+        if (panelConfirmDialog.open) panelConfirmDialog.close('cancel');
         for (const id of ['tabClients', 'tabWireguard', 'tabInterfaces', 'tabChr', 'tabCredentials']) {
             loadedPanels.delete(id);
             loadingPanels.delete(id);
@@ -2370,8 +2370,10 @@
     }
 
     async function flushClientConnections(ip) {
+        const ips = ip instanceof Set ? ip : new Set([ip]);
+        if (!ips.size) return 0;
         const connections = await apiList('/ip/firewall/connection?.proplist=.id,src-address,dst-address');
-        const mine = connections.filter((row) => row['.id'] && (ipOnly(row['src-address']) === ip || ipOnly(row['dst-address']) === ip));
+        const mine = connections.filter((row) => row['.id'] && (ips.has(ipOnly(row['src-address'])) || ips.has(ipOnly(row['dst-address']))));
         if (!mine.length) return 0;
         let removed = 0;
         await mapPool(mine, 6, async (row) => {
@@ -3978,7 +3980,7 @@
         const modems = discoverModems(state);
         if (!modems.length) throw new Error('مودم متصلی دیده نشد. بازنشانی انجام نشد و محدودهٔ قبلی اعمال نمی‌شود.');
         const subnets = modems.map(modem => modem.subnet).join('، ');
-        if (!window.confirm(
+        if (!await confirmPanel(
             'آدرس قبلی CHR روی ' + subnets + ' حذف شود و یک آدرس آزاد تازه در همان رنج مودم ساخته شود؟ بعد از اجرا وای‌فای را قطع و وصل کنید.'
         )) return 'بازنشانی لغو شد.';
         await removeOutsideModemSubnets(state, modems);
@@ -4274,11 +4276,12 @@
         if (!dns.length) throw new Error('حداقل یک DNS برای کلاینت‌ها انتخاب کنید.');
         const ranges = allocateChrPool(currentModem.cidr, input.count, reservedModemIps(state, currentModem));
         const network = state.networks.find(row => row.address === currentModem.subnet);
-        if (network && network.gateway !== currentModem.chrAddress && !window.confirm(
+        if (network && network.gateway !== currentModem.chrAddress && !await confirmPanel(
             'Gateway کلاینت‌ها از ' + network.gateway + ' به ' + currentModem.chrAddress + ' تغییر کند؟ آدرس‌ها در ' + currentModem.subnet + ' می‌مانند.'
         )) return 'ذخیره لغو شد.';
-        const enable = window.confirm(
-            'DHCP این مودم روشن شود؟ تأیید یعنی DHCP خود مودم خاموش است و فقط CHR پاسخ می‌دهد. لغو یعنی تنظیمات ذخیره می‌شود ولی سرور خاموش می‌ماند.'
+        const enable = await confirmPanel(
+            'اگر DHCP خود مودم خاموش است، می‌توانید DHCP را روی CHR روشن کنید.',
+            { title: 'ذخیرهٔ تنظیمات DHCP', acceptLabel: 'ذخیره و روشن‌کردن', cancelLabel: 'ذخیره در حالت خاموش' }
         );
         const keeper = serverForModem(state, currentModem);
         for (const server of state.servers) {
@@ -5976,11 +5979,12 @@
         });
     }
 
-    function applyRelayBulk(operation) {
+    async function applyRelayBulk(operation) {
         if (!monitoring || relayBusy || !selectedRelayNodes.size) return;
         if (!['enable', 'disable', 'delete'].includes(operation)) return;
-        if (operation === 'delete' && !window.confirm(`${selectedRelayNodes.size} پیر انتخاب‌شده و تخصیص کلاینت‌های آن‌ها حذف شوند؟`)) return;
         const selected = new Map(selectedRelayNodes);
+        if (operation === 'delete' && !await confirmPanel(`${selected.size} پیر انتخاب‌شده و تخصیص کلاینت‌های آن‌ها حذف شوند؟`, { destructive: true })) return;
+        if (!monitoring) return;
         void runRelayAction(async () => {
             const result = await manageMullvadPeers((finished, total) => {
                 relayStatus.textContent = `پردازش‌شده: ${finished} از ${total}`;
@@ -6542,10 +6546,10 @@
                 }, relayBusy, 'install:' + city.city.key));
             }
             if (city.extract) {
-                actions.append(relayIcon('استخراج شهر', 'extract', 'success', () => {
+                actions.append(relayIcon('استخراج شهر', 'extract', 'success', async () => {
                     const pending = city.city.relays.filter(relayIsFree);
                     if (!pending.length) return undefined;
-                    if (!window.confirm(`${pending.length} رلهٔ این شهر هر کدام به صورت یک نود جدا نصب شوند؟`)) return undefined;
+                    if (!await confirmPanel(`${pending.length} رلهٔ این شهر هر کدام به صورت یک نود جدا نصب شوند؟`)) return undefined;
                     return mutateRelay(() => extractCityRelays(pending));
                 }, relayBusy, 'extract:' + city.city.key));
             }
@@ -6608,8 +6612,8 @@
                 relayIcon('MTR و عیب‌یابی', 'trace', 'info', () => openDiagnoseModal(iface.name), relayBusy, iface.name),
                 relayIcon('راه‌اندازی مجدد', 'restart', 'info', () => mutateRelay(() => restartPeerInterface(iface.name)), relayBusy || Boolean(disabled), iface.name)
             );
-            if (iface.name.startsWith('mv-wg-')) actions.append(relayIcon('حذف', 'remove', 'danger', () => {
-                    if (window.confirm('با حذف این رله، تخصیص کلاینت‌های آن پاک می‌شود. ادامه می‌دهید؟')) {
+            if (iface.name.startsWith('mv-wg-')) actions.append(relayIcon('حذف', 'remove', 'danger', async () => {
+                    if (await confirmPanel('با حذف این رله، تخصیص کلاینت‌های آن پاک می‌شود. ادامه می‌دهید؟', { destructive: true })) {
                         return mutateRelay(() => removeCatalogRelay(iface));
                     }
                 }, relayBusy, iface.name));
@@ -7110,9 +7114,9 @@
             actions.className = 'relay-actions';
             actions.append(
                 relayIcon('ویرایش', 'edit', 'info', () => beginCredentialEdit(item)),
-                relayIcon('حذف', 'remove', 'danger', () => {
+                relayIcon('حذف', 'remove', 'danger', async () => {
                     if (used > 0) return;
-                    if (!window.confirm('این کلید Mullvad حذف شود؟')) return;
+                    if (!await confirmPanel('این کلید Mullvad حذف شود؟', { destructive: true })) return;
                     void saveCredentialAction({ action: 'delete', id: item.id });
                 }, used > 0)
             );
@@ -7616,10 +7620,10 @@
         }))).flat();
     }
 
-    async function ensureUplinkNameIsUnusedByClients(name, { allowUnusedTable = false } = {}) {
+    async function ensureUplinkNameIsUnusedByClients(name) {
         const [lists, tables] = await Promise.all([
             apiList('/ip/firewall/address-list?.proplist=list'),
-            allowUnusedTable ? [] : apiList('/routing/table?.proplist=name')
+            apiList('/routing/table?.proplist=name')
         ]);
         if (lists.some(row => row.list === name) || tables.some(row => row.name === name)) {
             throw new Error('اینترفیس در سیاست مسیریابی کلاینت‌ها استفاده می‌شود. ابتدا وابستگی کلاینت‌ها را بردارید.');
@@ -7631,7 +7635,7 @@
         const iface = target ? interfaces.find(row => row['.id'] === target['.id'])
             : interfaces.find(row => row.name === name);
         if (target && (!iface || iface.name !== target.name)) throw new Error('اینترفیس تغییر کرده است. دوباره آن را برای ویرایش باز کنید.');
-        if (iface && !target && !window.confirm('کانفیگ اینترفیس ' + name + ' جایگزین شود؟')) return false;
+        if (iface && !target && !await confirmPanel('کانفیگ اینترفیس ' + name + ' جایگزین شود؟')) return false;
         const ifaceName = iface?.name || name;
         if (interfaces.some(row => row['.id'] !== iface?.['.id'] && row.name.toLowerCase() === name.toLowerCase())) {
             throw new Error('این نام روی روتر وجود دارد. برای تغییر کانفیگ از ویرایش کارت استفاده کنید.');
@@ -7716,31 +7720,42 @@
         }
     }
 
-    const interfaceRemoveDialog = document.getElementById('interfaceRemoveDialog');
+    const panelConfirmDialog = document.getElementById('panelConfirmDialog');
 
-    function confirmInterfaceRemoval(name, routes) {
-        document.getElementById('interfaceRemoveName').textContent = 'اینترفیس ' + name + ' حذف شود؟';
-        const details = document.getElementById('interfaceRemoveRoutes');
-        details.hidden = !routes.length;
-        details.querySelector('ul').replaceChildren(...routes.map(route => {
+    function confirmPanel(message, options = {}) {
+        if (panelConfirmDialog.open) return Promise.resolve(false);
+        document.getElementById('panelConfirmTitle').textContent = options.title || 'تأیید عملیات';
+        document.getElementById('panelConfirmMessage').textContent = message;
+        const details = document.getElementById('panelConfirmDetails');
+        details.hidden = !options.items?.length;
+        details.querySelector('p').textContent = options.detailLabel || '';
+        details.querySelector('ul').replaceChildren(...(options.items || []).map(value => {
             const item = document.createElement('li');
-            item.dir = 'ltr';
-            item.textContent = route;
+            item.dir = 'auto';
+            item.textContent = value;
             return item;
         }));
-        interfaceRemoveDialog.returnValue = '';
+        const cancel = panelConfirmDialog.querySelector('[value="cancel"]');
+        const accept = panelConfirmDialog.querySelector('[value="accept"]');
+        cancel.textContent = options.cancelLabel || 'انصراف';
+        accept.textContent = options.acceptLabel || 'تأیید';
+        accept.classList.toggle('danger', Boolean(options.destructive));
+        panelConfirmDialog.returnValue = '';
         return new Promise(resolve => {
-            interfaceRemoveDialog.showModal();
-            interfaceRemoveDialog.addEventListener('close', () => resolve(interfaceRemoveDialog.returnValue === 'remove'), { once: true });
+            panelConfirmDialog.showModal();
+            panelConfirmDialog.addEventListener('close', () => resolve(panelConfirmDialog.returnValue === 'accept'), { once: true });
         });
     }
 
     async function removeUplink(target) {
-        const [[interfaces, routes], peers, addresses, nats] = await Promise.all([
+        const assignmentsPath = '/ip/firewall/address-list';
+        const readAssignments = () => apiList(assignmentsPath + '?.proplist=.id,list,address,disabled');
+        const [[interfaces, routes], peers, addresses, nats, assignments] = await Promise.all([
             readUplinks(),
             apiList(wireguardPeersPath + '?.proplist=.id,interface'),
             readInterfaceAddresses(target.name),
-            apiList('/ip/firewall/nat?.proplist=.id,out-interface,comment')
+            apiList('/ip/firewall/nat?.proplist=.id,out-interface,comment'),
+            readAssignments()
         ]);
         const iface = interfaces.find(row => row['.id'] === target['.id'] && row.name === target.name);
         if (!iface) throw new Error('اینترفیس تغییر کرده است. فهرست را دوباره باز کنید.');
@@ -7751,19 +7766,54 @@
             || (getMullvadUpstream(interfaces, routes) === iface.name && peers.some(peer => /^mv-wg-/.test(peer.interface)))) {
             throw new Error('ابتدا مسیر پیش‌فرض مولواد را از روی کارت اینترفیس دیگری انتخاب کنید.');
         }
-        await ensureUplinkNameIsUnusedByClients(iface.name, { allowUnusedTable: true });
+        const targetAssignments = rows => rows.filter(row => row.list === iface.name);
+        const attached = targetAssignments(assignments);
+        const affected = attached.filter(row => !isTrue(row.disabled));
         const routeDetails = dependentRoutes.slice(0, 8).map(route => route['dst-address'] + ' · ' + route['routing-table']);
         if (dependentRoutes.length > routeDetails.length) routeDetails.push('…');
-        if (!await confirmInterfaceRemoval(iface.name, routeDetails) || !monitoring) return false;
-        uplinkStatus.textContent = 'در حال حذف اینترفیس ' + iface.name + '…';
-        await deleteById(wireguardPath, iface['.id']);
-        for (const route of dependentRoutes) await deleteById(uplinkRoutePath, route['.id']);
-        forgetPeerPing(iface.name);
-        peerTrafficTests.delete(iface.name);
-        for (const peer of peers.filter(row => row.interface === iface.name)) await deleteById(wireguardPeersPath, peer['.id']);
-        for (const address of addresses) await deleteById(address.path, address['.id']);
-        for (const nat of nats.filter(row => row['out-interface'] === iface.name && row.comment === 'Exitflow Mullvad uplink')) {
-            await deleteById('/ip/firewall/nat', nat['.id']);
+        const message = 'اینترفیس ' + iface.name + ' حذف شود؟'
+            + (affected.length ? ' با تأیید شما، کلاینت‌های متصل به این اینترفیس ابتدا به اینترنت عادی منتقل می‌شوند.' : '');
+        if (!await confirmPanel(message, {
+            title: 'حذف اینترفیس', acceptLabel: 'حذف اینترفیس', destructive: true,
+            items: routeDetails, detailLabel: 'این مسیرهای وابسته هم حذف می‌شوند.'
+        }) || !monitoring) return false;
+
+        if (busy) throw new Error('پس از پایان تغییر مسیر کلاینت‌ها، دوباره تلاش کنید.');
+        setBusy(true);
+        try {
+            const current = await readAssignments();
+            const signature = rows => rows.map(row => JSON.stringify([row['.id'], row.address, isTrue(row.disabled)])).sort().join('|');
+            if (signature(targetAssignments(current)) !== signature(attached)) {
+                throw new Error('تخصیص کلاینت‌ها تغییر کرده است. برای بررسی و تأیید دوباره روی حذف بزنید.');
+            }
+            if (attached.length) {
+                uplinkStatus.textContent = 'در حال انتقال کلاینت‌ها به اینترنت عادی…';
+                const singleIp = row => {
+                    const address = String(row.address || '');
+                    return address.includes('/') && !address.endsWith('/32') ? '' : ipOnly(address);
+                };
+                const clientIps = new Set(affected.map(singleIp).filter(isIpv4));
+                const rowsToRemove = current.filter(row => row.list === iface.name
+                    || (isClientAddressList(row.list) && clientIps.has(singleIp(row))));
+                for (const row of rowsToRemove) await deleteById(assignmentsPath, row['.id']);
+                if (targetAssignments(await readAssignments()).length) {
+                    throw new Error('انتقال همهٔ کلاینت‌ها تأیید نشد. اینترفیس حفظ شد.');
+                }
+                await flushClientConnections(clientIps);
+            }
+            uplinkStatus.textContent = 'در حال حذف اینترفیس ' + iface.name + '…';
+            await deleteById(wireguardPath, iface['.id']);
+            for (const route of dependentRoutes) await deleteById(uplinkRoutePath, route['.id']);
+            forgetPeerPing(iface.name);
+            peerTrafficTests.delete(iface.name);
+            for (const peer of peers.filter(row => row.interface === iface.name)) await deleteById(wireguardPeersPath, peer['.id']);
+            for (const address of addresses) await deleteById(address.path, address['.id']);
+            for (const nat of nats.filter(row => row['out-interface'] === iface.name && row.comment === 'Exitflow Mullvad uplink')) {
+                await deleteById('/ip/firewall/nat', nat['.id']);
+            }
+            void refreshAll().catch(error => setPollStatus(error.message));
+        } finally {
+            setBusy(false);
         }
     }
 
